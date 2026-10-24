@@ -11,6 +11,7 @@ set -euo pipefail
 W=${1:-$(mktemp -d)}
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
+SIBLINGS=$(cd "$ROOT/.." && pwd)
 PY=${PY:-python3}
 VERBS="scan probe subs ports crawl js params fuzz tls secrets xss cors takeover diff"
 mkdir -p "$W/bin" "$W/all"
@@ -19,7 +20,7 @@ echo "workdir: $W"
 (cd "$ROOT" && go build -o "$W/bin/raijin-mcp" ./cmd/raijin-mcp)
 installed=()
 for v in $VERBS; do
-  src="$ROOT/../raijin-$v"
+  src="$SIBLINGS/raijin-$v"
   if [ -f "$src/cmd/raijin-$v/main.go" ] && (cd "$src" && go build -o "$W/bin/raijin-$v" "./cmd/raijin-$v" 2> /dev/null); then
     cp "$W/bin/raijin-$v" "$W/all/"
     installed+=("$v")
@@ -36,7 +37,7 @@ SCOPE='["example.com","*.example.com","10.0.0.0/8","192.0.2.0/24","127.0.0.1","l
 calls() {
   for v in "${installed[@]}"; do
     [ "$v" = diff ] && continue
-    f=$(ls "$ROOT/../raijin-$v"/testdata/sample* 2>/dev/null | head -1) || true
+    f=$(ls "$SIBLINGS/raijin-$v"/testdata/sample* 2>/dev/null | head -1) || true
     [ -n "$f" ] || continue
     printf '{"name":"raijin_%s","arguments":{"scope":%s,"input":"%s"}}\n' "$v" "$SCOPE" "$f"
   done

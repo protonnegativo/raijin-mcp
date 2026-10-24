@@ -107,10 +107,19 @@ func TestStringList(t *testing.T) {
 	}
 }
 
-func TestNonRepeatableTargetsAreJoined(t *testing.T) {
-	got := appendList(nil, "d", []string{"a.com", "b.com"}, false)
-	if len(got) != 1 || got[0] != "-d=a.com,b.com" {
-		t.Errorf("got %v", got)
+func TestSingleTargetFlag(t *testing.T) {
+	s, _ := Lookup("fuzz")
+	tl := &Tool{Spec: s, Path: "/bin/true", targetFlag: "u", flags: map[string]string{"u": "string", "scope": "string"}}
+	if _, ok := tl.schema()["properties"].(map[string]any)["target"]; !ok {
+		t.Fatal("a single-value target flag is the string property target")
+	}
+	argv, cleanup, err := tl.argv(json.RawMessage(`{"scope":["a.com"],"target":"https://a.com/FUZZ"}`))
+	defer cleanup()
+	if err != nil || argv[len(argv)-1] != "-u=https://a.com/FUZZ" {
+		t.Errorf("got %v %v", argv, err)
+	}
+	if _, _, err := tl.argv(json.RawMessage(`{"scope":["a.com"],"target":["https://a.com/FUZZ","https://b.com/FUZZ"]}`)); err == nil {
+		t.Error("two values for a single target flag must be refused, not joined")
 	}
 }
 

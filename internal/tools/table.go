@@ -128,7 +128,11 @@ var Table = []Spec{
 	{
 		Verb: "xss", Desc: "XSS check (dalfox): confirmed reflections with payload and context.",
 		Active: true, Targets: []string{"u"}, TargetDesc: "URLs with params", Input: true, Engine: "dalfox",
-		Params: []Param{rate, timeout},
+		Params: []Param{
+			{"params", "p", "array", "only test these params"},
+			{"delay", "delay", "integer", "ms between requests per host"},
+			timeout,
+		},
 	},
 	{
 		Verb: "cors", Desc: "Exploitable CORS only (credentials + reflected/null origin), with the proof request.",
@@ -138,6 +142,10 @@ var Table = []Spec{
 	{
 		Verb: "takeover", Desc: "Subdomain takeover: dangling records with provider and claim hint.",
 		Scope: ScopeRequired, Targets: []string{"d", "u", "host"}, TargetDesc: "hostnames", Input: true, Engine: "dnsx",
+		Params: []Param{
+			{"http", "http", "boolean", "also fetch candidates to match provider pages"},
+			{"rate", "rate", "integer", "DNS queries/s"},
+		},
 	},
 	{
 		Verb: "diff", Desc: "What changed between two Raijin outputs of the same tool.",

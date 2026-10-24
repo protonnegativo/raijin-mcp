@@ -166,7 +166,11 @@ func (t *Tool) schema() map[string]any {
 	props := map[string]any{}
 	var required []string
 	if t.targetFlag != "" {
-		props["targets"] = prop("array", t.TargetDesc)
+		if t.targetMulti {
+			props["targets"] = prop("array", t.TargetDesc)
+		} else {
+			props["target"] = prop("string", t.TargetDesc)
+		}
 	}
 	if t.Scope != ScopeNone {
 		desc := "authorized targets: host, *.domain, IP, CIDR, !excluded"
@@ -324,11 +328,14 @@ func (t *Tool) argv(raw json.RawMessage) ([]string, func(), error) {
 	}
 
 	if t.targetFlag != "" {
-		targets, err := stringList(args["targets"], "targets")
+		targets, err := stringList(args[t.targetName()], t.targetName())
 		if err != nil {
 			return nil, cleanup, err
 		}
-		argv = appendList(argv, t.targetFlag, targets, t.targetMulti)
+		if len(targets) > 1 && !t.targetMulti {
+			return nil, cleanup, badArg("target takes one value; call the tool once per target")
+		}
+		argv = appendList(argv, t.targetFlag, targets)
 	}
 	if t.Input {
 		inputs, err := stringList(args["input"], "input")
@@ -338,7 +345,7 @@ func (t *Tool) argv(raw json.RawMessage) ([]string, func(), error) {
 		if len(inputs) > 1 && !t.inputMulti {
 			return nil, cleanup, badArg("input takes one file")
 		}
-		argv = appendList(argv, "input", inputs, true)
+		argv = appendList(argv, "input", inputs)
 	}
 	for _, prm := range t.params {
 		v, ok := args[prm.Name]
@@ -394,7 +401,7 @@ func (t *Tool) has(flag string) bool {
 func (t *Tool) known() map[string]bool {
 	k := map[string]bool{}
 	if t.targetFlag != "" {
-		k["targets"] = true
+		k[t.targetName()] = true
 	}
 	if t.Scope != ScopeNone {
 		k["scope"] = true
@@ -414,15 +421,17 @@ func (t *Tool) known() map[string]bool {
 	return k
 }
 
-// appendList writes a list as a repeated flag, or as one comma-separated value when the flag is
-// not repeatable. The -flag=value form keeps a value that starts with "-" from being read as a flag.
-func appendList(argv []string, flag string, vals []string, multi bool) []string {
-	if len(vals) == 0 {
-		return argv
+// targetName is the targets property: "targets" for a repeatable flag, "target" for a single one.
+func (t *Tool) targetName() string {
+	if t.targetMulti {
+		return "targets"
 	}
-	if !multi {
-		return append(argv, "-"+flag+"="+strings.Join(vals, ","))
-	}
+	return "target"
+}
+
+// appendList writes a list as a repeated flag. The -flag=value form keeps a value that starts with
+// "-" from being read as a flag.
+func appendList(argv []string, flag string, vals []string) []string {
 	for _, v := range vals {
 		argv = append(argv, "-"+flag+"="+v)
 	}

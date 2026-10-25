@@ -18,8 +18,6 @@ import (
 	"github.com/protonnegativo/raijin-mcp/internal/tools"
 )
 
-const version = "0.1.0"
-
 // instructions is sent once at initialize. It explains the shared output so tool descriptions
 // do not have to repeat it.
 const instructions = "Raijin offensive-security tools, for authorized targets only. Each returns compact Raijin Schema JSON: summary, findings (ranked), groups (collapsed info), omitted (counts of what was cut), errors (with hints), next (follow-ups), raw (engine output file)."
@@ -46,10 +44,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if *showBanner {
-		banner.Write(stderr, "raijin-mcp", version, useColor(stderr))
+		banner.Write(stderr, "raijin-mcp", version(), useColor(stderr))
 	}
 	if *showVersion {
-		fmt.Fprintln(stdout, "raijin-mcp", version)
+		fmt.Fprintln(stdout, "raijin-mcp", version())
 		return 0
 	}
 	if fs.NArg() > 0 {
@@ -83,7 +81,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			missing = append(missing, t.Verb)
 		}
 	}
-	fmt.Fprintf(stderr, "raijin-mcp %s: exposing %d tool(s) [%s]", version, len(ready), strings.Join(ready, " "))
+	fmt.Fprintf(stderr, "raijin-mcp %s: exposing %d tool(s) [%s]", version(), len(ready), strings.Join(ready, " "))
 	if len(missing) > 0 {
 		fmt.Fprintf(stderr, "; unavailable [%s], see raijin-mcp --list --list-missing", strings.Join(missing, " "))
 	}
@@ -91,7 +89,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	srv := &mcp.Server{Name: "raijin-mcp", Version: version, Instructions: instructions, Provider: p}
+	srv := &mcp.Server{Name: "raijin-mcp", Version: version(), Instructions: instructions, Provider: p}
 	if err := srv.Serve(ctx, stdin, stdout); err != nil {
 		fmt.Fprintln(stderr, "raijin-mcp:", err)
 		return 1

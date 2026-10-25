@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -172,7 +173,7 @@ func TestInitializeNegotiatesVersion(t *testing.T) {
 		if res.ProtocolVersion != c.want {
 			t.Errorf("asked %s, got %s, want %s", c.asked, res.ProtocolVersion, c.want)
 		}
-		if res.ServerInfo.Name != "raijin-mcp" || res.ServerInfo.Version != version || res.Capabilities.Tools == nil {
+		if res.ServerInfo.Name != "raijin-mcp" || res.ServerInfo.Version != version() || res.Capabilities.Tools == nil {
 			t.Errorf("bad initialize result: %+v", res)
 		}
 	}
@@ -416,7 +417,7 @@ func TestListFlagAndVersion(t *testing.T) {
 	}
 	out.Reset()
 	run([]string{"--version"}, strings.NewReader(""), &out, &errb)
-	if out.String() != "raijin-mcp "+version+"\n" {
+	if !regexp.MustCompile(`^raijin-mcp (v\d+\.\d+\.\d+\S*|dev\S*)\n$`).MatchString(out.String()) {
 		t.Errorf("version: %q", out.String())
 	}
 	if code := run([]string{"--tools", "nope"}, strings.NewReader(""), &out, &errb); code != 1 {

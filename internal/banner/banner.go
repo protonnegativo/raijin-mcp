@@ -122,7 +122,7 @@ func (p painter) hud(tool, version string) []string {
 		row("SIGNAL .... "+strings.Repeat("█", 18)+"░░ 90%", cyan),
 		row("NOISE ..... "+strings.Repeat("░", 20)+" ~0", text),
 		row("OUTPUT .... Raijin Schema · JSON", text),
-		row("BUILD ..... "+tool+" v"+version, text),
+		row("BUILD ..... "+tool+" "+version, text),
 		p.paint("╰"+strings.Repeat("─", hudWidth)+"╯", frame),
 	}
 }

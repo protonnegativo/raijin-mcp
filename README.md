@@ -30,7 +30,9 @@ The list is not free: an agent that already knows one CLI pays nothing to call i
 go install github.com/protonnegativo/raijin-mcp/cmd/raijin-mcp@latest
 ```
 
-Then install the Raijin tools you want on `PATH` (for example `go install github.com/protonnegativo/raijin-scan/cmd/raijin-scan@latest`) and their engines (nuclei, httpx, ...). raijin-mcp exposes only the tools it finds.
+`@latest` installs the latest release. Then install the Raijin tools you want on `PATH` (for example `go install github.com/protonnegativo/raijin-scan/cmd/raijin-scan@latest`) and their engines (nuclei, httpx, ...). raijin-mcp exposes only the tools it finds.
+
+**Versions.** Every Raijin repo tags a release automatically on every change, and every engine update that passes the tool's tests is committed and released too. `raijin-<verb> --version` shows the release and the engine versions it was tested with; `raijin-mcp --version` shows its own.
 
 ## Add it to a client
 

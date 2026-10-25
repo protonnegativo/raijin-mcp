@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: test -z "$(gofmt -l .)"
+      - run: go test ./...
+      - run: pip install tiktoken
+      # The bench builds the sibling raijin-<verb> repos when they sit next to this one. In CI only this
+      # repo is checked out, so it runs the self-contained part: tools/list sizes (with stand-ins for the
+      # tools not built) and no end-to-end calls. Any call whose MCP result differs from the CLI fails.
+      - name: Offline benchmark (self-contained part)
+        run: |
+          PY=python3 bench/run.sh "$RUNNER_TEMP/bench" | tee "$RUNNER_TEMP/bench.log"
+          ! grep -q DIFFERENT "$RUNNER_TEMP/bench.log"

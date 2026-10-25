@@ -54,8 +54,10 @@ echo; echo "## tools/list"; echo
   "tools array only, all 14 tools=$W/every/tools.json" \
   "tools array only, --tools scan,probe=$W/two/tools.json" \
   "initialize result=$W/installed/initialize.json"
-for v in "${installed[@]}"; do "$W/bin/raijin-$v" -h > "$W/help-$v.txt" 2>&1 || true; done
-"$PY" "$HERE/count_tokens.py" "-h of the ${#installed[@]} installed binaries (for comparison)=$(printf "$W/help-%s.txt+" "${installed[@]}" | sed 's/+$//')"
+if [ ${#installed[@]} -gt 0 ]; then
+  for v in "${installed[@]}"; do "$W/bin/raijin-$v" -h > "$W/help-$v.txt" 2>&1 || true; done
+  "$PY" "$HERE/count_tokens.py" "-h of the ${#installed[@]} installed binaries (for comparison)=$(printf "$W/help-%s.txt+" "${installed[@]}" | sed 's/+$//')"
+fi
 
 echo; echo "## end-to-end calls"; echo
 i=0

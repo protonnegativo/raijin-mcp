@@ -78,7 +78,7 @@ Arguments shared by the tools:
 | Argument | Flag | |
 |---|---|---|
 | `scope` | `--scope` | authorized targets, one rule each (`example.com`, `*.example.com`, `10.0.0.0/24`, `!excluded`); written to a temp scope file for the call and removed after it |
-| `targets` (or `target`) | `-u`, `-d`, `-host`, `-p` | the tool's target flag; `target` (one string) when the flag takes one value, like raijin-fuzz's URL |
+| `targets` (or `target`) | `-u`, `-d`, `-host`, `-p` | the tool's target flag; `target` (one string) when the flag takes one value, like raijin-fuzz's URL. Optional: with only `scope`, the tool runs on every host the scope names (the description says so when the binary supports it) |
 | `input` | `--input` | replay a saved engine output instead of running the engine |
 | `max_items`, `max_bytes` | `--max-items`, `--max-bytes` | the output budget |
 | `engine_args` | after `--` | extra engine arguments, filtered (see below) |

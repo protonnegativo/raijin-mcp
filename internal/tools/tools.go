@@ -37,8 +37,10 @@ type Tool struct {
 	flags       map[string]string // flag -> type from -h ("" for bools); nil when -h could not be read
 	targetFlag  string
 	targetMulti bool
-	inputMulti  bool
-	params      []Param
+	// scopeDefault: with no targets the binary runs on every host the scope names
+	scopeDefault bool
+	inputMulti   bool
+	params       []Param
 }
 
 // Name is the MCP tool name: raijin_<verb>.
@@ -83,7 +85,7 @@ func resolve(s Spec, binDir string) *Tool {
 	if t.Path == "" {
 		t.Missing = "not installed: put " + t.Binary() + " on PATH (go install github.com/protonnegativo/" + t.Binary() + "/cmd/" + t.Binary() + "@latest) and restart raijin-mcp"
 	} else {
-		t.flags = helpFlags(t.Path)
+		t.flags, t.scopeDefault = helpFlags(t.Path)
 	}
 
 	has := func(flag string) bool {
@@ -127,14 +129,16 @@ var budgetParams = map[string]Param{
 
 var helpLine = regexp.MustCompile(`^  -([A-Za-z0-9][A-Za-z0-9._-]*)(?: (\S+))?`)
 
-// helpFlags reads the flags a Go binary prints for -h: "  -name type" lines.
-func helpFlags(path string) map[string]string {
+// helpFlags reads the flags a Go binary prints for -h: "  -name type" lines. It also reports whether
+// the help says the binary runs on every host the scope names when given no targets.
+func helpFlags(path string) (map[string]string, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var out bytes.Buffer
 	cmd := exec.CommandContext(ctx, path, "-h")
 	cmd.Stdout, cmd.Stderr = &out, &out
 	_ = cmd.Run() // flag.ContinueOnError makes -h exit non-zero
+	scopeDefault := bytes.Contains(out.Bytes(), []byte("every host the scope names"))
 	flags := map[string]string{}
 	sc := bufio.NewScanner(&out)
 	for sc.Scan() {
@@ -143,9 +147,9 @@ func helpFlags(path string) map[string]string {
 		}
 	}
 	if len(flags) == 0 {
-		return nil
+		return nil, scopeDefault
 	}
-	return flags
+	return flags, scopeDefault
 }
 
 // Tools lists the installed tools (and, with ListMissing, the others with their install hint).
@@ -166,10 +170,14 @@ func (t *Tool) schema() map[string]any {
 	props := map[string]any{}
 	var required []string
 	if t.targetFlag != "" {
+		desc := t.TargetDesc
+		if t.scopeDefault {
+			desc += "; default: every host in scope"
+		}
 		if t.targetMulti {
-			props["targets"] = prop("array", t.TargetDesc)
+			props["targets"] = prop("array", desc)
 		} else {
-			props["target"] = prop("string", t.TargetDesc)
+			props["target"] = prop("string", desc)
 		}
 	}
 	if t.Scope != ScopeNone {

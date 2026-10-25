@@ -2,6 +2,8 @@ package tools
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -133,5 +135,25 @@ func TestDiffTakesPositionalFiles(t *testing.T) {
 	}
 	if _, _, err := tl.argv(json.RawMessage(`{"files":["-rf"]}`)); err == nil {
 		t.Error("a positional that looks like a flag must be refused")
+	}
+}
+
+// A binary whose help says it runs on the scope's hosts by default gets that in the targets description,
+// so the agent knows it can pass only scope.
+func TestScopeDefaultTargets(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "raijin-probe")
+	help := "usage: raijin-probe --scope scope.txt [-u target]\n\nWith no targets it probes every host the scope names.\n\n  -scope string\n  -u value\n"
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf '"+help+"' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := Lookup("probe")
+	tl := resolve(s, dir)
+	p := tl.schema()["properties"].(map[string]any)["targets"].(map[string]any)
+	if !strings.HasSuffix(p["description"].(string), "default: every host in scope") {
+		t.Errorf("targets description = %q", p["description"])
+	}
+	if req, _ := tl.schema()["required"].([]string); len(req) != 1 || req[0] != "scope" {
+		t.Errorf("only scope is required: %v", req)
 	}
 }

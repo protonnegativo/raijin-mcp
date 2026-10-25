@@ -65,6 +65,7 @@ type Server struct {
 	Name         string
 	Version      string
 	Instructions string
+	Notice       func() string // appended to Instructions at initialize when not empty; nil for none
 	Provider     Provider
 
 	mu       sync.Mutex // guards out and inflight
@@ -190,11 +191,17 @@ func (s *Server) initialize(params json.RawMessage) any {
 		ProtocolVersion string `json:"protocolVersion"`
 	}
 	_ = json.Unmarshal(orEmpty(params), &p)
+	instructions := s.Instructions
+	if s.Notice != nil {
+		if n := s.Notice(); n != "" {
+			instructions += " " + n
+		}
+	}
 	return map[string]any{
 		"protocolVersion": Negotiate(p.ProtocolVersion),
 		"capabilities":    map[string]any{"tools": map[string]bool{"listChanged": false}},
 		"serverInfo":      map[string]string{"name": s.Name, "version": s.Version},
-		"instructions":    s.Instructions,
+		"instructions":    instructions,
 	}
 }
 

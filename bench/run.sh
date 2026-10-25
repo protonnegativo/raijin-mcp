@@ -43,9 +43,9 @@ calls() {
   done
 }
 calls > "$W/calls.jsonl"
-PATH="$W/bin:/usr/bin:/bin" python3 "$HERE/mcp_session.py" "$W/installed" "$W/bin/raijin-mcp" < "$W/calls.jsonl" 2> "$W/installed.log"
-PATH="$W/all:/usr/bin:/bin" python3 "$HERE/mcp_session.py" "$W/every" "$W/bin/raijin-mcp" < /dev/null 2> /dev/null
-PATH="$W/bin:/usr/bin:/bin" python3 "$HERE/mcp_session.py" "$W/two" "$W/bin/raijin-mcp" --tools scan,probe < /dev/null 2> /dev/null
+PATH="$W/bin:/usr/bin:/bin" python3 "$HERE/mcp_session.py" "$W/installed" "$W/bin/raijin-mcp" --update-check=false < "$W/calls.jsonl" 2> "$W/installed.log"
+PATH="$W/all:/usr/bin:/bin" python3 "$HERE/mcp_session.py" "$W/every" "$W/bin/raijin-mcp" --update-check=false < /dev/null 2> /dev/null
+PATH="$W/bin:/usr/bin:/bin" python3 "$HERE/mcp_session.py" "$W/two" "$W/bin/raijin-mcp" --update-check=false --tools scan,probe < /dev/null 2> /dev/null
 
 echo; echo "## tools/list"; echo
 "$PY" "$HERE/count_tokens.py" \

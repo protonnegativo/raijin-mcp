@@ -16,6 +16,7 @@ import (
 	"github.com/protonnegativo/raijin-mcp/internal/banner"
 	"github.com/protonnegativo/raijin-mcp/internal/mcp"
 	"github.com/protonnegativo/raijin-mcp/internal/tools"
+	"github.com/protonnegativo/raijin-mcp/internal/update"
 )
 
 // instructions is sent once at initialize. It explains the shared output so tool descriptions
@@ -27,6 +28,9 @@ func main() {
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "update" {
+		return runUpdate(args[1:], stdout, stderr)
+	}
 	fs := flag.NewFlagSet("raijin-mcp", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	only := fs.String("tools", "", "comma-separated verbs to expose, e.g. scan,probe (default: every Raijin tool found)")
@@ -35,9 +39,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	callTimeout := fs.Duration("call-timeout", 30*time.Minute, "limit for one tool call (0 means none)")
 	list := fs.Bool("list", false, "print the tools/list result as JSON and exit")
 	showVersion := fs.Bool("version", false, "print the version")
+	updateCheck := fs.Bool("update-check", true, "check for updates in the background, at most once a day")
 	showBanner := fs.Bool("banner", false, "print the Raijin banner to stderr (off by default to keep output small)")
 	fs.Usage = func() {
-		fmt.Fprintf(stderr, "usage: raijin-mcp [flags]   (speaks MCP on stdin/stdout)\n\n")
+		fmt.Fprintf(stderr, "usage: raijin-mcp [flags]   (speaks MCP on stdin/stdout)\n"+
+			"       raijin-mcp update [--check] [--pinned] [--tools scan,probe]   (raijin-mcp update -h)\n\n")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -67,10 +73,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 	}
 	p := tools.Discover(opt)
+	uopt := updateOptions(opt.Only)
+	sys := update.System{BinDir: *binDir}
+	up := &update.Provider{Provider: p, Sys: sys, Opt: uopt, Version: version()}
 	if *list {
 		enc := json.NewEncoder(stdout)
 		enc.SetEscapeHTML(false)
-		_ = enc.Encode(map[string]any{"tools": p.Tools()})
+		_ = enc.Encode(map[string]any{"tools": up.Tools()})
 		return 0
 	}
 	var ready, missing []string
@@ -89,7 +98,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	srv := &mcp.Server{Name: "raijin-mcp", Version: version(), Instructions: instructions, Provider: p}
+	srv := &mcp.Server{Name: "raijin-mcp", Version: version(), Instructions: instructions, Provider: up}
+	if *updateCheck {
+		srv.Notice = update.StartNotice(sys, uopt, update.CachePath(), time.Now()).Sentence
+	}
 	if err := srv.Serve(ctx, stdin, stdout); err != nil {
 		fmt.Fprintln(stderr, "raijin-mcp:", err)
 		return 1

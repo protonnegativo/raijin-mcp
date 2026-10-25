@@ -32,7 +32,32 @@ go install github.com/protonnegativo/raijin-mcp/cmd/raijin-mcp@latest
 
 `@latest` installs the latest release. Then install the Raijin tools you want on `PATH` (for example `go install github.com/protonnegativo/raijin-scan/cmd/raijin-scan@latest`) and their engines (nuclei, httpx, ...). raijin-mcp exposes only the tools it finds.
 
-**Versions.** Every Raijin repo tags a release automatically on every change, and every engine update that passes the tool's tests is committed and released too. `raijin-<verb> --version` shows the release and the engine versions it was tested with; `raijin-mcp --version` shows its own.
+**Versions.** Every Raijin repo tags a release automatically on every change, and every engine update that passes the tool's tests is committed and released too. `raijin-<verb> --version` shows the release and the engine versions it was tested with; `raijin-mcp --version` shows its own. `raijin-mcp update` updates every Raijin tool at once (see [Updating](#updating)).
+
+## Updating
+
+`raijin-mcp update` is the `apt update` of the Raijin tools: it finds every installed `raijin-<verb>` the way the server does (`--bin-dir`, then `PATH`), and raijin-mcp itself when it was installed with `go install`.
+
+```bash
+raijin-mcp update --check              # what is out of date; installs nothing
+raijin-mcp update                      # update every installed raijin-<verb> and its engines
+raijin-mcp update --pinned             # engines at the versions each tool was tested with
+raijin-mcp update --tools scan,probe   # only these
+```
+
+```
+NAME         INSTALLED                           LATEST  ACTION
+raijin-diff  v0.1.0                              v0.1.0  up to date
+raijin-scan  v0.0.0-20261025153622-8f04ba98dd58  v0.1.0  update
+nuclei       3.3.9                               3.11.1  update
+2 of 3 out of date
+```
+
+- **Tools.** The installed version is read from the binary's build info; a local build or an untagged commit is older than any release. The latest comes from the module (the repos are private, so `GOPRIVATE=github.com/protonnegativo/*` is added and git fetches them). An update is `go install .../cmd/raijin-<verb>@latest` into the directory the binary is in.
+- **Engines.** The tested versions come from each tool's `engines.json` at its latest release, and the installed one from the same version command the tool runs. Go engines are installed with `go install <module>@latest` (`--pinned`: `@v<tested>`) next to the existing binary when that directory is writable, else into `GOBIN`. trufflehog is installed by its official release script, only with `--allow-scripts`; otherwise the command is printed. arjun goes through `pipx` (`pipx upgrade arjun`, pinned `pipx install --force arjun==<v>`). nmap is a system package: the `apt`/`brew` command is printed, never run. Nothing runs with sudo.
+- **Output.** A table by default, `--format json` for a Raijin Schema result (`tool: "raijin-update"`, findings for what is out of date, groups for what is up to date, errors with hints). Exit 0 when everything is up to date or was updated, 1 when a lookup or an install failed or something is left to run by hand.
+- **MCP.** The `raijin_update` tool is always listed, even with no other tool installed: `{"apply": false, "pinned": false, "tools": ["scan"]}`. By default it only checks and returns the JSON; `apply: true` runs the update (never install scripts). Restart raijin-mcp afterwards to load the new binaries. Its `tools/list` entry costs about 80 tokens.
+- **Startup notice.** At most once a day, the server runs the check in the background (10 seconds at most) and caches the result in the user cache directory (`raijin/update-check.json`). When something is out of date, `initialize` adds one sentence to its instructions: `Updates available for N Raijin tools/engines: call raijin_update.` initialize never waits for the network: until the check is done it uses the cached result. `--update-check=false` turns it off.
 
 ## Add it to a client
 
@@ -134,6 +159,7 @@ The `target` path is shortened. A call without a scope:
 | `--call-timeout` | 30m | limit for one tool call (0 means none) |
 | `--list` | false | print the `tools/list` result and exit |
 | `--version` | false | print the version |
+| `--update-check` | true | check for updates in the background, at most once a day |
 | `--banner` | false | print the banner to stderr |
 
 The banner is off by default. `--banner` prints it to **stderr** (stdout carries the protocol), with the version taken from the binary. Colors are disabled when `NO_COLOR` is set or stderr is not a terminal.
@@ -146,7 +172,7 @@ go vet ./...
 PY=<python with tiktoken> bench/run.sh
 ```
 
-Standard library only. The protocol tests start the server on pipes with fake Raijin binaries (shell scripts) in a temp `PATH`: initialize and version negotiation, `tools/list` with only installed tools and flags read from `-h`, `tools/call` arguments and result, unknown tool, invalid params, missing scope, engine missing, cancellation.
+Standard library only. The protocol tests start the server on pipes with fake Raijin binaries (shell scripts) in a temp `PATH`: initialize and version negotiation, `tools/list` with only installed tools and flags read from `-h`, `tools/call` arguments and result, unknown tool, invalid params, missing scope, engine missing, cancellation. The updater's tests replace the machine with a fake (no network, no install): version ordering (tags, pseudo-versions, `(devel)`), build info, each engine's version output, the plan for tools and engines, apply and its failures, the startup cache.
 
 To expose a new Raijin tool, add its entry to `Table` in `internal/tools/table.go`: verb, one-line description, target flags, whether it is active, and its main flags.
 

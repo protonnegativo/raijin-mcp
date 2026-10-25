@@ -70,19 +70,22 @@ func Discover(opt Options) *Provider {
 // Resolved returns every tool considered, installed or not.
 func (p *Provider) Resolved() []*Tool { return p.tools }
 
+// Locate finds an executable in binDir, then on PATH; "" when it is in neither.
+func Locate(name, binDir string) string {
+	if binDir != "" {
+		if c := filepath.Join(binDir, name); isExec(c) {
+			return c
+		}
+	}
+	if c, err := exec.LookPath(name); err == nil {
+		return c
+	}
+	return ""
+}
+
 func resolve(s Spec, binDir string) *Tool {
 	t := &Tool{Spec: s, targetMulti: true}
-	if binDir != "" {
-		if c := filepath.Join(binDir, t.Binary()); isExec(c) {
-			t.Path = c
-		}
-	}
-	if t.Path == "" {
-		if c, err := exec.LookPath(t.Binary()); err == nil {
-			t.Path = c
-		}
-	}
-	if t.Path == "" {
+	if t.Path = Locate(t.Binary(), binDir); t.Path == "" {
 		t.Missing = "not installed: put " + t.Binary() + " on PATH (go install github.com/protonnegativo/" + t.Binary() + "/cmd/" + t.Binary() + "@latest) and restart raijin-mcp"
 	} else {
 		t.flags, t.scopeDefault = helpFlags(t.Path)

@@ -84,7 +84,7 @@ func start(t *testing.T, flags ...string) *session {
 	outR, outW := io.Pipe()
 	s := &session{t: t, in: inW, out: bufio.NewReader(outR), done: make(chan int, 1)}
 	go func() {
-		code := run(flags, inR, outW, io.Discard)
+		code := run(append([]string{"--update-check=false"}, flags...), inR, outW, io.Discard)
 		outW.Close()
 		s.done <- code
 	}()
@@ -255,8 +255,8 @@ func TestToolsListMissingWithHint(t *testing.T) {
 func TestToolsFilter(t *testing.T) {
 	fakePath(t)
 	got := listTools(t, start(t, "--tools", "scan"))
-	if len(got) != 1 || got["raijin_scan"] == nil {
-		t.Errorf("--tools scan should expose only raijin_scan, got %d tools", len(got))
+	if len(got) != 2 || got["raijin_scan"] == nil || got["raijin_update"] == nil {
+		t.Errorf("--tools scan should expose only raijin_scan and raijin_update, got %d tools", len(got))
 	}
 }
 
@@ -435,5 +435,93 @@ func TestBannerGoesToStderrOnly(t *testing.T) {
 	var v map[string]any
 	if err := json.Unmarshal(out.Bytes(), &v); err != nil {
 		t.Fatalf("stdout is not JSON with --banner: %v", err)
+	}
+}
+
+// fakeGo puts a go on PATH that logs its arguments and answers a module lookup with v9.9.9.
+func fakeGo(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Dir(os.Getenv("ARGS_OUT"))
+	log := filepath.Join(dir, "go.log")
+	script := `#!/bin/sh
+echo "$*" >> "` + log + `"
+case "$1" in mod|list) echo '{"Path":"x","Version":"v9.9.9"}';; esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "go"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return log
+}
+
+func TestUpdateToolListedAndChecksOnly(t *testing.T) {
+	fakePath(t)
+	log := fakeGo(t)
+	s := start(t)
+	got := listTools(t, s)
+	if got["raijin_update"] == nil {
+		t.Fatal("raijin_update must always be listed")
+	}
+	text, isErr := s.call(2, "raijin_update", `{}`)
+	var res struct {
+		Tool     string `json:"tool"`
+		Findings []struct{ Name, Action string }
+	}
+	if err := json.Unmarshal([]byte(text), &res); err != nil || isErr || res.Tool != "raijin-update" {
+		t.Fatalf("raijin_update: %v %v %s", err, isErr, text)
+	}
+	// the fake tools are shell scripts with no build info: unknown version, so out of date
+	if len(res.Findings) == 0 || res.Findings[0].Action != "update" {
+		t.Errorf("fake tools should be out of date: %s", text)
+	}
+	b, _ := os.ReadFile(log)
+	if !strings.Contains(string(b), "mod download") || strings.Contains(string(b), "install") {
+		t.Errorf("apply=false must look up and install nothing, go ran: %q", b)
+	}
+	if _, isErr := s.call(3, "raijin_update", `{"tools":["nope"]}`); !isErr {
+		t.Error("unknown verb must be an error")
+	}
+}
+
+func TestUpdateToolListedWithNoTools(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	got := listTools(t, start(t))
+	if len(got) != 1 || got["raijin_update"] == nil {
+		t.Errorf("with no tools installed only raijin_update is listed, got %v", got)
+	}
+}
+
+func TestStartupNoticeFromCache(t *testing.T) {
+	fakePath(t)
+	cache := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cache)
+	if err := os.MkdirAll(filepath.Join(cache, "raijin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fresh := `{"checked":"` + time.Now().UTC().Format(time.RFC3339) + `","outdated":3}`
+	if err := os.WriteFile(filepath.Join(cache, "raijin", "update-check.json"), []byte(fresh), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	go func() { run(nil, inR, outW, io.Discard); outW.Close() }()
+	t.Cleanup(func() { inW.Close() })
+	s := &session{t: t, in: inW, out: bufio.NewReader(outR)}
+	s.send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}`)
+	var res struct{ Instructions string }
+	if err := json.Unmarshal(s.recv().Result, &res); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(res.Instructions, " Updates available for 3 Raijin tools/engines: call raijin_update.") {
+		t.Errorf("instructions: %q", res.Instructions)
+	}
+}
+
+func TestUpdateCommandFlags(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"update", "--tools", "nope"}, strings.NewReader(""), &out, &errb); code != 1 {
+		t.Errorf("unknown verb: exit %d", code)
+	}
+	if code := run([]string{"update", "--format", "xml"}, strings.NewReader(""), &out, &errb); code != 1 {
+		t.Errorf("bad format: exit %d", code)
 	}
 }

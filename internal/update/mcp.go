@@ -30,9 +30,9 @@ var updateTool = mcp.Tool{
 	Name:        ToolName,
 	Description: "Check (default) or apply updates for Raijin tools and their engines.",
 	InputSchema: map[string]any{"type": "object", "properties": map[string]any{
-		"apply":  map[string]string{"type": "boolean"},
-		"pinned": map[string]any{"type": "boolean", "description": "engines at tested versions"},
-		"tools":  map[string]any{"type": "array", "items": map[string]string{"type": "string"}, "description": "verbs, e.g. scan"},
+		"apply": map[string]string{"type": "boolean"},
+		"force": map[string]any{"type": "boolean", "description": "latest engine versions, even untested"},
+		"tools": map[string]any{"type": "array", "items": map[string]string{"type": "string"}, "description": "verbs, e.g. scan"},
 	}},
 }
 
@@ -49,18 +49,19 @@ func (p *Provider) Call(ctx context.Context, name string, raw json.RawMessage) (
 	}
 	var args struct {
 		Apply  bool     `json:"apply"`
-		Pinned bool     `json:"pinned"`
+		Force  bool     `json:"force"`
+		Pinned bool     `json:"pinned"` // the old name of the default, still accepted
 		Tools  []string `json:"tools"`
 	}
 	if b := bytes.TrimSpace(raw); len(b) > 0 && string(b) != "null" {
 		dec := json.NewDecoder(bytes.NewReader(b))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&args); err != nil {
-			return failResult("invalid_arguments", "arguments are {apply: bool, pinned: bool, tools: [verbs]}"), nil
+			return failResult("invalid_arguments", "arguments are {apply: bool, force: bool, tools: [verbs]}"), nil
 		}
 	}
 	opt := p.Opt
-	opt.Pinned, opt.AllowScripts = args.Pinned, false // never run install scripts for a model
+	opt.Force, opt.AllowScripts = args.Force, false // never run install scripts for a model
 	if len(args.Tools) > 0 {
 		opt.Verbs, opt.Self = nil, ""
 		for _, v := range ParseVerbs(strings.Join(args.Tools, ",")) {
@@ -105,7 +106,12 @@ type Notice struct {
 	outdated int
 }
 
+// cacheFormat is bumped when what Outdated counts changes: 2 counts against the tested engine
+// versions (1, unversioned, against the latest). A cache of another format is checked again.
+const cacheFormat = 2
+
 type cached struct {
+	Format   int       `json:"format"`
 	Checked  time.Time `json:"checked"`
 	Outdated int       `json:"outdated"`
 }
@@ -125,7 +131,7 @@ func CachePath() string {
 func StartNotice(sys Sys, opt Options, cache string, now time.Time) *Notice {
 	n := &Notice{}
 	var c cached
-	if b, err := os.ReadFile(cache); err == nil && json.Unmarshal(b, &c) == nil {
+	if b, err := os.ReadFile(cache); err == nil && json.Unmarshal(b, &c) == nil && c.Format == cacheFormat {
 		n.outdated = c.Outdated
 		if now.Sub(c.Checked) < 24*time.Hour && !c.Checked.After(now) {
 			return n
@@ -144,7 +150,7 @@ func StartNotice(sys Sys, opt Options, cache string, now time.Time) *Notice {
 		if cache == "" || len(r.Errors) > 0 {
 			return // a failed lookup (offline, no git access) is retried at the next start
 		}
-		b, _ := json.Marshal(cached{Checked: now, Outdated: r.Outdated()})
+		b, _ := json.Marshal(cached{Format: cacheFormat, Checked: now, Outdated: r.Outdated()})
 		writeAtomic(cache, b) // two servers starting together must not interleave their writes
 	}()
 	return n

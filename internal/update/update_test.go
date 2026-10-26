@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/protonnegativo/raijin-mcp/internal/mcp"
 )
 
 func TestCompare(t *testing.T) {
@@ -214,7 +216,7 @@ func byName(r *Report) map[string]*Item {
 
 func TestCheckPlansWithoutInstalling(t *testing.T) {
 	f := newFake(t)
-	r := Check(context.Background(), f, Options{Verbs: []string{"scan", "diff", "ports", "probe"}})
+	r := Check(context.Background(), f, Options{Verbs: []string{"scan", "diff", "ports", "probe"}, Force: true})
 	if len(f.ran) != 0 {
 		t.Fatalf("Check ran %v", f.ran)
 	}
@@ -244,21 +246,51 @@ func TestCheckPlansWithoutInstalling(t *testing.T) {
 	}
 }
 
-func TestCheckPinned(t *testing.T) {
+func TestCheckTestedByDefault(t *testing.T) {
 	f := newFake(t)
-	f.engines["nuclei"] = "Nuclei Engine Version: v3.4.0" // newer than tested: pinned goes back
+	r := Check(context.Background(), f, Options{Verbs: []string{"scan", "ports"}})
+	it := byName(r)
+	if n := it["nuclei"]; n.Action != "" || n.Target != "3.3.9" || !n.Tested {
+		t.Errorf("nuclei at the tested version, 3.4.0 out: %+v", n)
+	}
+	if n := it["naabu"]; n.Action != "update" || n.Target != "2.6.1" || !n.Tested ||
+		n.Command != "GOBIN=/opt/bin go install github.com/projectdiscovery/naabu/v2/cmd/naabu@v2.6.1" {
+		t.Errorf("naabu: %+v", n)
+	}
+	var b strings.Builder
+	r.Table(&b)
+	if strings.Contains(b.String(), "--force") {
+		t.Errorf("tested versions need no --force line:\n%s", b.String())
+	}
+
+	f.engines["nuclei"] = "Nuclei Engine Version: v3.4.0" // newer than tested: back to the tested one
 	f.writable = false
-	r := Check(context.Background(), f, Options{Verbs: []string{"scan"}, Pinned: true})
+	r = Check(context.Background(), f, Options{Verbs: []string{"scan"}})
 	n := byName(r)["nuclei"]
-	if n.Action != "update" || n.Target != "3.3.9" || !n.Tested ||
+	if n.Action != "downgrade" || n.Target != "3.3.9" || !n.Tested ||
 		n.Command != "go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.3.9" {
-		t.Errorf("pinned nuclei: %+v", n)
+		t.Errorf("nuclei 3.4.0: %+v", n)
+	}
+	b.Reset()
+	r.Table(&b)
+	if !strings.Contains(b.String(), "nuclei: 3.4.0 is newer than the tested 3.3.9 (--force keeps it)") {
+		t.Errorf("table:\n%s", b.String())
+	}
+	// forced, 3.4.0 is the latest: nothing to do, but it is untested
+	r = Check(context.Background(), f, Options{Verbs: []string{"scan"}, Force: true})
+	if n := byName(r)["nuclei"]; n.Action != "" || n.Tested {
+		t.Errorf("forced nuclei 3.4.0: %+v", n)
+	}
+	b.Reset()
+	r.Table(&b)
+	if !strings.HasSuffix(b.String(), "--force: engines at the latest version, not tested with Raijin\n") {
+		t.Errorf("table:\n%s", b.String())
 	}
 }
 
 func TestApply(t *testing.T) {
 	f := newFake(t)
-	r := Check(context.Background(), f, Options{Verbs: []string{"scan", "diff", "ports"}})
+	r := Check(context.Background(), f, Options{Verbs: []string{"scan", "diff", "ports"}, Force: true})
 	// the installs "work": the fake now reports the new versions
 	f.tools["/opt/bin/raijin-scan"] = "v0.1.0"
 	f.engines["naabu"] = "Current Version: 2.6.1"
@@ -303,7 +335,7 @@ func TestEngineVersionFromBuildInfo(t *testing.T) {
 	f.dirs[Module+"/raijin-fuzz"] = moduleDir(t, `{"ffuf": {"version": "2.1.0", "go": "github.com/ffuf/ffuf/v2"}}`)
 	f.paths["naabu"] = "/opt/bin/naabu"
 	f.mods["/opt/bin/naabu"] = "github.com/someone/else v9.0.0" // another module's binary: its output counts
-	r := Check(context.Background(), f, Options{Verbs: []string{"scan", "fuzz", "ports"}})
+	r := Check(context.Background(), f, Options{Verbs: []string{"scan", "fuzz", "ports"}, Force: true})
 	it := byName(r)
 	if n := it["nuclei"]; n.Installed != "3.4.0" || n.Action != "" {
 		t.Errorf("nuclei: %+v", n)
@@ -324,7 +356,7 @@ func TestApplyNamesTheCopyFirstOnPath(t *testing.T) {
 	f := newFake(t)
 	f.paths["nuclei"] = "/root/go/bin/nuclei"
 	f.writable = false // goes to the default GOBIN, /home/u/go/bin
-	r := Check(context.Background(), f, Options{Verbs: []string{"scan"}})
+	r := Check(context.Background(), f, Options{Verbs: []string{"scan"}, Force: true})
 	f.mods = map[string]string{"/home/u/go/bin/nuclei": "github.com/projectdiscovery/nuclei/v3 v3.4.0"}
 	Apply(context.Background(), f, r)
 	want := "installed /home/u/go/bin/nuclei 3.4.0, but /root/go/bin/nuclei comes first on PATH and is 3.3.9"
@@ -334,7 +366,7 @@ func TestApplyNamesTheCopyFirstOnPath(t *testing.T) {
 
 	// the copy on PATH has the new module version, whatever it prints: updated
 	f = newFake(t)
-	r = Check(context.Background(), f, Options{Verbs: []string{"scan"}})
+	r = Check(context.Background(), f, Options{Verbs: []string{"scan"}, Force: true})
 	f.mods = map[string]string{"/usr/local/bin/nuclei": "github.com/projectdiscovery/nuclei/v3 v3.4.0"}
 	f.engines["nuclei"] = "WARNING: sonic/ast only supports (go1.17~1.26 and amd64 CPU)"
 	Apply(context.Background(), f, r)
@@ -362,8 +394,9 @@ func dnsxFake(t *testing.T, subs, takeover string) *fakeSys {
 const dnsxBelow130 = `{"dnsx": {"version": "1.2.1", "go": "github.com/projectdiscovery/dnsx/cmd/dnsx", "below": "1.3.0"}}`
 
 func TestBelowDowngrades(t *testing.T) {
+	// forced: the highest release under the bound
 	f := dnsxFake(t, dnsxBelow130, dnsxBelow130)
-	r := Check(context.Background(), f, Options{Verbs: []string{"subs", "takeover"}})
+	r := Check(context.Background(), f, Options{Verbs: []string{"subs", "takeover"}, Force: true})
 	d := byName(r)["dnsx"]
 	if d.Action != "downgrade" || d.Target != "1.2.3" || d.Tested || d.Installed != "1.3.1" ||
 		d.Command != "GOBIN=/usr/local/bin go install github.com/projectdiscovery/dnsx/cmd/dnsx@v1.2.3" ||
@@ -391,14 +424,19 @@ func TestBelowDowngrades(t *testing.T) {
 	// an accepted version installed: nothing to do, even if it is older than the highest accepted
 	f = dnsxFake(t, dnsxBelow130, dnsxBelow130)
 	f.mods["/usr/local/bin/dnsx"] = "github.com/projectdiscovery/dnsx v1.2.3"
-	if d := byName(Check(context.Background(), f, Options{Verbs: []string{"subs", "takeover"}}))["dnsx"]; d.Action != "" {
+	if d := byName(Check(context.Background(), f, Options{Verbs: []string{"subs", "takeover"}, Force: true}))["dnsx"]; d.Action != "" {
 		t.Errorf("dnsx 1.2.3: %+v", d)
+	}
+	// by default the tested version, even under the bound
+	if d := byName(Check(context.Background(), f, Options{Verbs: []string{"subs", "takeover"}}))["dnsx"]; d.Action != "downgrade" ||
+		d.Target != "1.2.1" || !d.Tested || !strings.HasSuffix(d.Command, "dnsx@v1.2.1") {
+		t.Errorf("dnsx 1.2.3 by default: %+v", d)
 	}
 
 	// no version list: the tested version
 	f = dnsxFake(t, dnsxBelow130, dnsxBelow130)
 	f.versions = nil
-	if d := byName(Check(context.Background(), f, Options{Verbs: []string{"subs", "takeover"}}))["dnsx"]; d.Target != "1.2.1" || !d.Tested || d.Action != "downgrade" {
+	if d := byName(Check(context.Background(), f, Options{Verbs: []string{"subs", "takeover"}, Force: true}))["dnsx"]; d.Target != "1.2.1" || !d.Tested || d.Action != "downgrade" {
 		t.Errorf("dnsx without a version list: %+v", d)
 	}
 }
@@ -412,12 +450,19 @@ func TestBelowStrictestWins(t *testing.T) {
 		t.Errorf("dnsx: %+v", d)
 	}
 
-	// a tool without a bound tests 1.3.1: pinned still goes to the version under the other's bound
+	// a tool without a bound tests 1.3.1: the target is still the version under the other's bound, and
+	// the table says which tool tested it
 	f = dnsxFake(t, `{"dnsx": {"version": "1.3.1", "go": "github.com/projectdiscovery/dnsx/cmd/dnsx"}}`, dnsxBelow130)
-	d = byName(Check(context.Background(), f, Options{Verbs: []string{"subs", "takeover"}, Pinned: true}))["dnsx"]
+	r := Check(context.Background(), f, Options{Verbs: []string{"subs", "takeover"}})
+	d = byName(r)["dnsx"]
 	if d.Target != "1.2.1" || !d.Tested || d.Action != "downgrade" || d.Reason != "raijin-takeover accepts only dnsx below 1.3.0" ||
-		!strings.HasSuffix(d.Command, "dnsx@v1.2.1") {
-		t.Errorf("pinned dnsx: %+v", d)
+		!strings.HasSuffix(d.Command, "dnsx@v1.2.1") || d.TestedBy != "1.2.1 tested by raijin-takeover (raijin-subs 1.3.1)" {
+		t.Errorf("dnsx: %+v", d)
+	}
+	var b strings.Builder
+	r.Table(&b)
+	if !strings.Contains(b.String(), "dnsx: 1.2.1 tested by raijin-takeover (raijin-subs 1.3.1)") {
+		t.Errorf("table:\n%s", b.String())
 	}
 }
 
@@ -450,17 +495,17 @@ func TestReleaseAndPipEngines(t *testing.T) {
 	f.paths["arjun"], f.engines["arjun"] = "/usr/local/bin/arjun", "2.2.5"
 	f.paths["pipx"] = "/usr/bin/pipx"
 
-	r := Check(context.Background(), f, Options{Verbs: []string{"secrets", "params"}, Pinned: true})
+	r := Check(context.Background(), f, Options{Verbs: []string{"secrets", "params"}})
 	it := byName(r)
 	if th := it["trufflehog"]; th.Action != "manual" ||
 		!strings.HasPrefix(th.Command, "curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin v3.99.7") {
 		t.Errorf("trufflehog without --allow-scripts: %+v", th)
 	}
 	if a := it["arjun"]; a.Action != "update" || a.Command != "pipx install --force arjun==2.2.7" {
-		t.Errorf("pinned arjun: %+v", a)
+		t.Errorf("arjun: %+v", a)
 	}
 
-	r = Check(context.Background(), f, Options{Verbs: []string{"secrets", "params"}, AllowScripts: true})
+	r = Check(context.Background(), f, Options{Verbs: []string{"secrets", "params"}, AllowScripts: true, Force: true})
 	it = byName(r)
 	if th := it["trufflehog"]; th.Action != "update" || len(th.argv) != 3 || th.argv[0] != "sh" {
 		t.Errorf("trufflehog with --allow-scripts: %+v", th)
@@ -481,7 +526,7 @@ func TestLookupFailureIsAnError(t *testing.T) {
 
 func TestJSONShape(t *testing.T) {
 	f := newFake(t)
-	r := Check(context.Background(), f, Options{Verbs: []string{"scan", "diff"}})
+	r := Check(context.Background(), f, Options{Verbs: []string{"scan", "diff"}, Force: true})
 	var out struct {
 		Tool     string `json:"tool"`
 		Findings []struct {
@@ -531,7 +576,7 @@ func TestNoticeUsesFreshCache(t *testing.T) {
 	for n.Sentence() == "" && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if n.Sentence() != "Updates available for 2 Raijin tools/engines: call raijin_update." {
+	if n.Sentence() != "Updates available for 1 Raijin tools/engines: call raijin_update." { // raijin-scan; nuclei is at the tested version
 		t.Fatalf("sentence: %q", n.Sentence())
 	}
 	for i := 0; i < 100; i++ {
@@ -546,8 +591,71 @@ func TestNoticeUsesFreshCache(t *testing.T) {
 	if n.Sentence() == "" {
 		t.Error("the cached result must be used")
 	}
-	os.WriteFile(cache, []byte(`{"checked":"2026-10-25T12:00:00Z","outdated":0}`), 0o644)
+	os.WriteFile(cache, []byte(`{"format":2,"checked":"2026-10-25T12:00:00Z","outdated":0}`), 0o644)
 	if n := StartNotice(nil, Options{}, cache, now.Add(time.Hour)); n.Sentence() != "" {
 		t.Errorf("nothing out of date: %q", n.Sentence())
+	}
+
+	// a cache of the old format counted against the latest versions: checked again, not used
+	os.WriteFile(cache, []byte(`{"checked":"2026-10-25T12:00:00Z","outdated":5}`), 0o644)
+	n = StartNotice(newFake(t), Options{Verbs: []string{"diff"}}, cache, now.Add(time.Hour))
+	if n.Sentence() != "" {
+		t.Errorf("old cache used: %q", n.Sentence())
+	}
+	for i := 0; i < 100; i++ { // and rewritten in the new format
+		if b, _ := os.ReadFile(cache); strings.Contains(string(b), `"format":2`) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Error("the old cache was not checked again")
+}
+
+type noTools struct{}
+
+func (noTools) Tools() []mcp.Tool { return nil }
+func (noTools) Call(context.Context, string, json.RawMessage) (mcp.Result, error) {
+	return mcp.Result{}, nil
+}
+
+func TestProviderForceArgument(t *testing.T) {
+	f := newFake(t)
+	p := &Provider{Provider: noTools{}, Sys: f, Opt: Options{Verbs: []string{"scan"}}, Version: "v0.1.0"}
+	latestOf := func(args string) string {
+		res, err := p.Call(context.Background(), ToolName, json.RawMessage(args))
+		if err != nil || len(res.Content) == 0 {
+			t.Fatalf("%s: %v %+v", args, err, res)
+		}
+		var out struct {
+			Findings []struct{ Name, Latest, Tested string }
+			Errors   []Error
+		}
+		if err := json.Unmarshal([]byte(res.Content[0].Text), &out); err != nil || len(out.Errors) > 0 {
+			t.Fatalf("%s: %v %s", args, err, res.Content[0].Text)
+		}
+		for _, f := range out.Findings {
+			if f.Name == "nuclei" {
+				return f.Latest
+			}
+		}
+		return ""
+	}
+	if v := latestOf(`{}`); v != "" {
+		t.Errorf("default: nuclei at the tested version needs nothing, got latest %q", v)
+	}
+	if v := latestOf(`{"pinned": true}`); v != "" {
+		t.Errorf("pinned is the default: got latest %q", v)
+	}
+	if v := latestOf(`{"force": true}`); v != "3.4.0" {
+		t.Errorf("force: nuclei latest %q", v)
+	}
+	res, _ := p.Call(context.Background(), ToolName, json.RawMessage(`{"forced": true}`))
+	if !res.IsError || !strings.Contains(res.Content[0].Text, "{apply: bool, force: bool, tools: [verbs]}") {
+		t.Errorf("unknown argument: %+v", res)
+	}
+	var schema struct{ Properties map[string]any }
+	b, _ := json.Marshal(p.Tools()[0].InputSchema)
+	if json.Unmarshal(b, &schema); schema.Properties["force"] == nil || schema.Properties["pinned"] != nil {
+		t.Errorf("schema: %s", b)
 	}
 }

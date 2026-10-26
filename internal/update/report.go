@@ -11,7 +11,8 @@ import (
 
 // Table writes the report as a compact table (an engine's target is marked when it is the version the
 // tools were tested with rather than the latest), then the commands to run by hand, why a downgrade is
-// needed, and the errors.
+// needed, which tool set a tested version the tools disagree on, and the errors. Forced, a last line
+// says when an untested engine is installed or proposed.
 func (r *Report) Table(w io.Writer) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "NAME\tINSTALLED\tLATEST\tACTION")
@@ -34,8 +35,17 @@ func (r *Report) Table(w io.Writer) {
 		}
 	}
 	for _, it := range r.Items {
-		if it.Action == "downgrade" {
+		switch {
+		case it.Action != "downgrade":
+		case it.Reason != "":
 			fmt.Fprintf(w, "%s: %s is not accepted; %s\n", it.Name, it.Installed, it.Reason)
+		default:
+			fmt.Fprintf(w, "%s: %s is newer than the tested %s (--force keeps it)\n", it.Name, it.Installed, it.Target)
+		}
+	}
+	for _, it := range r.Items {
+		if it.TestedBy != "" {
+			fmt.Fprintf(w, "%s: %s\n", it.Name, it.TestedBy)
 		}
 	}
 	for _, it := range r.Items {
@@ -47,6 +57,22 @@ func (r *Report) Table(w io.Writer) {
 		fmt.Fprintf(w, "error: %s: %s\n", e.Target, e.Hint)
 	}
 	fmt.Fprintln(w, r.summary())
+	if r.Force && r.untested() {
+		fmt.Fprintln(w, "--force: engines at the latest version, not tested with Raijin")
+	}
+}
+
+// untested is true when an engine other than the tested version is installed or proposed.
+func (r *Report) untested() bool {
+	for _, it := range r.Items {
+		switch {
+		case it.Kind != "engine" || it.SystemOK:
+		case it.Action != "" && !it.Tested,
+			it.Installed != "" && Compare(it.Installed, it.engine.Version) != 0:
+			return true
+		}
+	}
+	return false
 }
 
 func installed(it *Item) string {
@@ -107,6 +133,7 @@ type finding struct {
 	Result    string   `json:"result,omitempty"`
 	Error     string   `json:"error,omitempty"`
 	Reason    string   `json:"reason,omitempty"`
+	TestedBy  string   `json:"tested_by,omitempty"`
 	UsedBy    []string `json:"used_by,omitempty"`
 }
 
@@ -136,7 +163,7 @@ func (r *Report) JSON(ver, next string) []byte {
 			ok = append(ok, it.Name+" "+it.Installed)
 		default:
 			f := finding{Severity: "low", Kind: it.Kind, Name: it.Name, Installed: installed(it), Action: it.Action,
-				Command: it.Command, Result: it.Result, Error: it.Err, Reason: it.Reason, UsedBy: it.UsedBy}
+				Command: it.Command, Result: it.Result, Error: it.Err, Reason: it.Reason, TestedBy: it.TestedBy, UsedBy: it.UsedBy}
 			if it.Tested {
 				f.Tested = it.Target
 			} else {

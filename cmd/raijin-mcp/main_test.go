@@ -497,7 +497,7 @@ func TestStartupNoticeFromCache(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(cache, "raijin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	fresh := `{"checked":"` + time.Now().UTC().Format(time.RFC3339) + `","outdated":3}`
+	fresh := `{"format":2,"checked":"` + time.Now().UTC().Format(time.RFC3339) + `","outdated":3}`
 	if err := os.WriteFile(filepath.Join(cache, "raijin", "update-check.json"), []byte(fresh), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -523,5 +523,21 @@ func TestUpdateCommandFlags(t *testing.T) {
 	}
 	if code := run([]string{"update", "--format", "xml"}, strings.NewReader(""), &out, &errb); code != 1 {
 		t.Errorf("bad format: exit %d", code)
+	}
+	// --pinned is the old name of the default: same check, same output
+	fakePath(t)
+	fakeGo(t)
+	check := func(flags ...string) string {
+		var out bytes.Buffer
+		run(append([]string{"update", "--check", "--format", "json"}, flags...), strings.NewReader(""), &out, io.Discard)
+		return out.String()
+	}
+	if def, pinned := check(), check("--pinned"); def == "" || def != pinned {
+		t.Errorf("--pinned differs from the default:\n%s\n%s", def, pinned)
+	}
+	errb.Reset()
+	run([]string{"update", "-h"}, strings.NewReader(""), &out, &errb)
+	if h := errb.String(); !strings.Contains(h, "update [--check] [--force] [--tools scan,probe]") || !strings.Contains(h, "now the default") {
+		t.Errorf("help: %s", h)
 	}
 }

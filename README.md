@@ -40,26 +40,26 @@ go install github.com/protonnegativo/raijin-mcp/cmd/raijin-mcp@latest
 
 ```bash
 raijin-mcp update --check              # what is out of date; installs nothing
-raijin-mcp update                      # update every installed raijin-<verb> and its engines
-raijin-mcp update --pinned             # engines at the versions each tool was tested with
+raijin-mcp update                      # every installed raijin-<verb>, and its engines at the tested versions
+raijin-mcp update --force              # engines at their latest version, even untested
 raijin-mcp update --tools scan,probe   # only these
 ```
 
 ```
-NAME         INSTALLED                           LATEST  ACTION
-raijin-diff  v0.1.0                              v0.1.0  up to date
-raijin-scan  v0.0.0-20261025153622-8f04ba98dd58  v0.1.0  update
-nuclei       3.3.9                               3.11.1  update
+NAME         INSTALLED                           LATEST           ACTION
+raijin-diff  v0.1.0                              v0.1.0           up to date
+raijin-scan  v0.0.0-20261025153622-8f04ba98dd58  v0.1.0           update
+nuclei       3.3.9                               3.11.1 (tested)  update
 2 of 3 out of date
 ```
 
 - **Tools.** The installed version is read from the binary's build info; a local build or an untagged commit is older than any release. The latest comes from the module (the repos are private, so `GOPRIVATE=github.com/protonnegativo/*` is added and git fetches them). An update is `go install .../cmd/raijin-<verb>@latest` into the directory the binary is in.
-- **Engines.** The tested versions come from each tool's `engines.json` at its latest release. The installed version of a Go engine is the module version in its build info (what `go install` wrote; nuclei, ffuf and tlsx print wrong versions); other engines, and binaries without one, fall back to the version command the tool runs. Go engines are installed with `go install <module>@latest` (`--pinned`: `@v<tested>`) next to the existing binary when that directory is writable, else into `GOBIN`; when an older copy still comes first on `PATH`, the failure names both paths.
-- **Known-bad ranges.** `"below": "1.3.0"` in an `engines.json` entry (dnsx in raijin-subs and raijin-takeover) means the tool accepts only versions lower than that. The target is then the highest release under the bound (`go list -m -versions`; the tested version if that fails), installed with `@v<that>`; when tools disagree the strictest bound wins. An installed version at or above the bound is a `downgrade`, and the table says which tool set the bound.
-- **System packages.** nmap is installed by the distro, which decides the minor version: the same major as the tested one is `ok (system)` and not out of date. Another major, or a missing nmap, prints the `apt`/`brew` command. trufflehog is installed by its official release script, only with `--allow-scripts`; otherwise the command is printed. arjun goes through `pipx` (`pipx upgrade arjun`, pinned `pipx install --force arjun==<v>`). Nothing runs with sudo.
+- **Engines.** By default each engine goes to the version its tools were tested with, from each tool's `engines.json` at its latest release; a newer one installed is a `downgrade`. When tools tested different versions of a shared engine, the highest wins and the table says which tool tested it. `--force` goes to the latest version instead (`below` bounds still hold) and ends with `--force: engines at the latest version, not tested with Raijin`. `--pinned`, the old name of the default, is still accepted. The installed version of a Go engine is the module version in its build info (what `go install` wrote; nuclei, ffuf and tlsx print wrong versions); other engines, and binaries without one, fall back to the version command the tool runs. Go engines are installed with `go install <module>@v<tested>` (`--force`: `@latest`) next to the existing binary when that directory is writable, else into `GOBIN`; when an older copy still comes first on `PATH`, the failure names both paths.
+- **Known-bad ranges.** `"below": "1.3.0"` in an `engines.json` entry (dnsx in raijin-subs and raijin-takeover) means the tool accepts only versions lower than that. With `--force` the target is then the highest release under the bound (`go list -m -versions`; the tested version if that fails), installed with `@v<that>`; when tools disagree the strictest bound wins. An installed version at or above the bound is a `downgrade`, and the table says which tool set the bound.
+- **System packages.** nmap is installed by the distro, which decides the minor version: the same major as the tested one is `ok (system)` and not out of date. Another major, or a missing nmap, prints the `apt`/`brew` command. trufflehog is installed by its official release script, only with `--allow-scripts`; otherwise the command is printed. arjun goes through `pipx` (`pipx install --force arjun==<tested>`, forced `pipx upgrade arjun`). Nothing runs with sudo.
 - **Output.** A table by default, `--format json` for a Raijin Schema result (`tool: "raijin-update"`, findings for what is out of date, groups for what is up to date, errors with hints). Exit 0 when everything is up to date or was updated, 1 when a lookup or an install failed or something is left to run by hand.
-- **MCP.** The `raijin_update` tool is always listed, even with no other tool installed: `{"apply": false, "pinned": false, "tools": ["scan"]}`. By default it only checks and returns the JSON; `apply: true` runs the update (never install scripts). Restart raijin-mcp afterwards to load the new binaries. Its `tools/list` entry costs about 80 tokens.
-- **Startup notice.** At most once a day, the server runs the check in the background (10 seconds at most) and caches the result in the user cache directory (`raijin/update-check.json`). When something is out of date, `initialize` adds one sentence to its instructions: `Updates available for N Raijin tools/engines: call raijin_update.` initialize never waits for the network: until the check is done it uses the cached result. `--update-check=false` turns it off.
+- **MCP.** The `raijin_update` tool is always listed, even with no other tool installed: `{"apply": false, "force": false, "tools": ["scan"]}` (the old `pinned` is accepted and ignored). By default it only checks and returns the JSON; `apply: true` runs the update (never install scripts). Restart raijin-mcp afterwards to load the new binaries. Its `tools/list` entry costs about 80 tokens.
+- **Startup notice.** At most once a day, the server runs the default check (tested versions) in the background (10 seconds at most) and caches the result in the user cache directory (`raijin/update-check.json`). When something is out of date, `initialize` adds one sentence to its instructions: `Updates available for N Raijin tools/engines: call raijin_update.` initialize never waits for the network: until the check is done it uses the cached result. `--update-check=false` turns it off.
 
 ## Add it to a client
 

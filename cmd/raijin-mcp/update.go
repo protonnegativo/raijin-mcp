@@ -19,15 +19,16 @@ func runUpdate(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("raijin-mcp update", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	check := fs.Bool("check", false, "only show what is out of date; install nothing")
-	pinned := fs.Bool("pinned", false, "engines at the versions each tool was tested with, instead of the latest")
+	force := fs.Bool("force", false, "engines at their latest version, even if no Raijin tool was tested with it")
+	fs.Bool("pinned", false, "engines at the versions each tool was tested with (now the default)")
 	only := fs.String("tools", "", "comma-separated verbs to update, e.g. scan,probe (default: every Raijin tool installed)")
 	binDir := fs.String("bin-dir", "", "directory searched for raijin-<verb> binaries and engines before PATH")
 	format := fs.String("format", "table", "output format: table or json")
 	allowScripts := fs.Bool("allow-scripts", false, "run an engine's official install script (trufflehog) instead of printing it")
 	fs.Usage = func() {
-		fmt.Fprintf(stderr, "usage: raijin-mcp update [flags]\n\n"+
-			"Updates every installed raijin-<verb> to its latest release and its engines to their latest\n"+
-			"version (--pinned: the tested one). Never uses sudo; system packages are printed, not installed.\n\n")
+		fmt.Fprintf(stderr, "usage: raijin-mcp update [--check] [--force] [--tools scan,probe]\n\n"+
+			"Updates every installed raijin-<verb> to its latest release and its engines to the version the\n"+
+			"tools were tested with (--force: the latest). Never uses sudo; system packages are printed, not installed.\n\n")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -50,7 +51,7 @@ func runUpdate(args []string, stdout, stderr io.Writer) int {
 		verbs = append(verbs, v)
 	}
 	opt := updateOptions(verbs)
-	opt.Pinned, opt.AllowScripts = *pinned, *allowScripts
+	opt.Force, opt.AllowScripts = *force, *allowScripts
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

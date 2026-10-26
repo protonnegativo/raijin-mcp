@@ -1,6 +1,6 @@
 // Package update checks and updates the installed Raijin tools and the engines they run: the tools
-// to their latest release, the engines to their latest version or, pinned, to the version each tool
-// was tested with (its engines.json).
+// to their latest release, the engines to the version each tool was tested with (its engines.json) or,
+// forced, to their latest version.
 package update
 
 import (
@@ -48,7 +48,7 @@ type Engine struct {
 type Options struct {
 	Verbs        []string // tools to look for, raijin-<verb>
 	Self         string   // path of the running raijin-mcp, checked too when installed with go install; "" for none
-	Pinned       bool     // engines at their tested version instead of the latest
+	Force        bool     // engines at their latest version instead of the tested one
 	AllowScripts bool     // run install scripts (trufflehog's) instead of printing them
 }
 
@@ -68,10 +68,11 @@ type Item struct {
 	Unknown   bool     // installed, but its version could not be read
 	SystemOK  bool     // a system package at the tested major: nothing to do, whatever the minor
 	Reason    string   // engines with a bound: the tools that set it, and the bound
+	TestedBy  string   // engines whose tools tested different versions: which tool set the target
 	env       []string
 	argv      []string
 	installTo string
-	exact     bool   // the install must give Target exactly (pinned, or below a bound)
+	exact     bool   // the install must give Target exactly (tested, or below a bound)
 	engine    Engine // the merged engines.json entry, to read the version again after Apply
 }
 
@@ -87,6 +88,7 @@ type Report struct {
 	Items   []*Item
 	Errors  []Error
 	Applied bool
+	Force   bool // engines were checked against their latest version
 }
 
 // Outdated counts the items with something to do.
@@ -152,7 +154,7 @@ type tool struct {
 
 // Check finds what is out of date. It installs nothing.
 func Check(ctx context.Context, sys Sys, opt Options) *Report {
-	r := &Report{}
+	r := &Report{Force: opt.Force}
 	var found []*tool
 	for _, verb := range opt.Verbs {
 		bin := "raijin-" + verb
@@ -221,10 +223,13 @@ func newTool(sys Sys, bin, path string) *tool {
 }
 
 // merged is an engine as every tool that runs it accepts it: Below is the strictest bound, Version the
-// highest tested version under it, and boundBy the tools that set the bound.
+// highest tested version under it, boundBy the tools that set the bound, and testedBy, when the tools
+// tested different versions, the tools that tested Version and the others ("raijin-js 1.1.2").
 type merged struct {
 	Engine
-	boundBy []string
+	boundBy  []string
+	testedBy []string
+	others   []string
 }
 
 // mergeEngines joins the engines of every tool. An engine two tools share keeps the lowest bound and
@@ -261,6 +266,19 @@ func mergeEngines(found []*tool) (map[string]merged, map[string][]string) {
 		}
 		bound := m.Below
 		m.Engine, m.Below = pick, bound
+		var by, others []string
+		for _, t := range found {
+			if e, ok := t.engines[name]; ok && Compare(e.Version, pick.Version) == 0 {
+				by = append(by, t.item.Name)
+			} else if ok {
+				others = append(others, t.item.Name+" "+e.Version)
+			}
+		}
+		if len(others) > 0 {
+			m.testedBy, m.others = by, others
+			sort.Strings(m.testedBy)
+			sort.Strings(m.others)
+		}
 		sort.Strings(m.boundBy)
 		engines[name] = m
 	}
@@ -273,7 +291,7 @@ func mergeEngines(found []*tool) (map[string]merged, map[string][]string) {
 func checkEngine(ctx context.Context, sys Sys, opt Options, name string, m merged, usedBy []string) *Item {
 	e := m.Engine
 	it := &Item{Kind: "engine", Name: name, UsedBy: usedBy, Target: e.Version, Tested: true,
-		exact: opt.Pinned || e.Below != "", engine: e}
+		exact: !opt.Force || e.Below != "", engine: e}
 	it.Path = sys.Locate(name)
 	if it.Path != "" {
 		it.Installed = engineVersion(ctx, sys, name, it.Path, e)
@@ -286,12 +304,15 @@ func checkEngine(ctx context.Context, sys Sys, opt Options, name string, m merge
 		}
 		it.Reason = fmt.Sprintf("%s %s only %s below %s", strings.Join(m.boundBy, ", "), verb, name, e.Below)
 	}
+	if !opt.Force && len(m.testedBy) > 0 {
+		it.TestedBy = fmt.Sprintf("%s tested by %s (%s)", e.Version, strings.Join(m.testedBy, ", "), strings.Join(m.others, ", "))
+	}
 	goMod := e.Go
 	if e.Release != "" && goMod == "" {
 		goMod = "github.com/" + e.Release
 	}
 	switch {
-	case opt.Pinned || goMod == "":
+	case !opt.Force || goMod == "":
 	case e.Below != "":
 		if v, err := highestBelow(ctx, sys, modulePath(goMod), e.Below); err == nil && Compare(v, e.Version) > 0 {
 			it.Target, it.Tested = strings.TrimPrefix(v, "v"), false
@@ -317,9 +338,10 @@ func checkEngine(ctx context.Context, sys Sys, opt Options, name string, m merge
 			return it
 		}
 		it.Action = "update"
-	case opt.Pinned && Compare(it.Installed, it.Target) != 0,
-		!opt.Pinned && Compare(it.Installed, it.Target) < 0:
+	case Compare(it.Installed, it.Target) < 0:
 		it.Action = "update"
+	case !opt.Force && Compare(it.Installed, it.Target) > 0:
+		it.Action = "downgrade" // newer than tested: back to the tested version
 	default:
 		return it
 	}

@@ -43,7 +43,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	showBanner := fs.Bool("banner", false, "print the Raijin banner to stderr (off by default to keep output small)")
 	fs.Usage = func() {
 		fmt.Fprintf(stderr, "usage: raijin-mcp [flags]   (speaks MCP on stdin/stdout)\n"+
-			"       raijin-mcp update [--check] [--pinned] [--tools scan,probe]   (raijin-mcp update -h)\n\n")
+			"       raijin-mcp update [--check] [--force] [--tools scan,probe]   (raijin-mcp update -h)\n\n")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {

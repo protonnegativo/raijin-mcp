@@ -10,7 +10,8 @@ import (
 )
 
 // Table writes the report as a compact table (an engine's target is marked when it is the version the
-// tools were tested with rather than the latest), then the commands to run by hand and the errors.
+// tools were tested with rather than the latest), then the commands to run by hand, why a downgrade is
+// needed, and the errors.
 func (r *Report) Table(w io.Writer) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "NAME\tINSTALLED\tLATEST\tACTION")
@@ -30,6 +31,11 @@ func (r *Report) Table(w io.Writer) {
 		fmt.Fprintln(w, "\nrun by hand:")
 		for _, m := range manual {
 			fmt.Fprintln(w, "  "+m)
+		}
+	}
+	for _, it := range r.Items {
+		if it.Action == "downgrade" {
+			fmt.Fprintf(w, "%s: %s is not accepted; %s\n", it.Name, it.Installed, it.Reason)
 		}
 	}
 	for _, it := range r.Items {
@@ -60,6 +66,8 @@ func (it *Item) status() string {
 		return it.Result
 	case it.Unknown:
 		return "version unknown"
+	case it.SystemOK:
+		return "ok (system)"
 	case it.Action == "":
 		return "up to date"
 	case it.Action == "manual":
@@ -98,6 +106,7 @@ type finding struct {
 	Command   string   `json:"command,omitempty"`
 	Result    string   `json:"result,omitempty"`
 	Error     string   `json:"error,omitempty"`
+	Reason    string   `json:"reason,omitempty"`
 	UsedBy    []string `json:"used_by,omitempty"`
 }
 
@@ -127,7 +136,7 @@ func (r *Report) JSON(ver, next string) []byte {
 			ok = append(ok, it.Name+" "+it.Installed)
 		default:
 			f := finding{Severity: "low", Kind: it.Kind, Name: it.Name, Installed: installed(it), Action: it.Action,
-				Command: it.Command, Result: it.Result, Error: it.Err, UsedBy: it.UsedBy}
+				Command: it.Command, Result: it.Result, Error: it.Err, Reason: it.Reason, UsedBy: it.UsedBy}
 			if it.Tested {
 				f.Tested = it.Target
 			} else {

@@ -41,6 +41,7 @@ type Engine struct {
 	Pip     string `json:"pip,omitempty"`     // PyPI package, installed with pipx
 	System  string `json:"system,omitempty"`  // OS package; never installed here
 	Release string `json:"release,omitempty"` // GitHub repo whose install script installs the release
+	Below   string `json:"below,omitempty"`   // the tool accepts only versions lower than this (a known-bad range)
 }
 
 // Options select what is checked and how.
@@ -59,15 +60,19 @@ type Item struct {
 	Installed string   // installed version; "" when missing or unknown
 	Target    string   // version to reach
 	Tested    bool     // Target is the tested version, not the latest
-	Action    string   // "" (nothing to do), "update", "install" or "manual"
+	Action    string   // "" (nothing to do), "update", "downgrade", "install" or "manual"
 	Command   string   // what runs, or what to run by hand
 	Result    string   // after Apply: "updated", "failed" or "run by hand"
 	Err       string   // why it failed
 	UsedBy    []string // engines: the tools that run it
 	Unknown   bool     // installed, but its version could not be read
+	SystemOK  bool     // a system package at the tested major: nothing to do, whatever the minor
+	Reason    string   // engines with a bound: the tools that set it, and the bound
 	env       []string
 	argv      []string
 	installTo string
+	exact     bool   // the install must give Target exactly (pinned, or below a bound)
+	engine    Engine // the merged engines.json entry, to read the version again after Apply
 }
 
 // Error is a lookup that failed.
@@ -215,17 +220,49 @@ func newTool(sys Sys, bin, path string) *tool {
 	return &tool{item: it, module: Module + "/" + bin, pkg: Module + "/" + bin + "/cmd/" + bin}
 }
 
-// mergeEngines joins the engines of every tool; an engine two tools share keeps the higher tested
-// version.
-func mergeEngines(found []*tool) (map[string]Engine, map[string][]string) {
-	engines, users := map[string]Engine{}, map[string][]string{}
+// merged is an engine as every tool that runs it accepts it: Below is the strictest bound, Version the
+// highest tested version under it, and boundBy the tools that set the bound.
+type merged struct {
+	Engine
+	boundBy []string
+}
+
+// mergeEngines joins the engines of every tool. An engine two tools share keeps the lowest bound and
+// the highest tested version under it.
+func mergeEngines(found []*tool) (map[string]merged, map[string][]string) {
+	engines, users := map[string]merged{}, map[string][]string{}
 	for _, t := range found {
 		for name, e := range t.engines {
-			if old, ok := engines[name]; !ok || Compare(e.Version, old.Version) > 0 {
-				engines[name] = e
+			m := engines[name]
+			switch c := Compare(e.Below, m.Below); {
+			case e.Below == "":
+			case m.Below == "" || c < 0:
+				m.Below, m.boundBy = e.Below, []string{t.item.Name}
+			case c == 0:
+				m.boundBy = append(m.boundBy, t.item.Name)
 			}
+			engines[name] = m
 			users[name] = append(users[name], t.item.Name)
 		}
+	}
+	for name, m := range engines {
+		// the highest tested version under the bound; when no tool tested one, the first tool's
+		var pick Engine
+		has, pickUnder := false, false
+		for _, t := range found {
+			e, ok := t.engines[name]
+			if !ok {
+				continue
+			}
+			under := m.Below == "" || Compare(e.Version, m.Below) < 0
+			if !has || under && (!pickUnder || Compare(e.Version, pick.Version) > 0) {
+				pick, has, pickUnder = e, true, under
+			}
+		}
+		bound := m.Below
+		m.Engine, m.Below = pick, bound
+		sort.Strings(m.boundBy)
+		engines[name] = m
 	}
 	for _, u := range users {
 		sort.Strings(u)
@@ -233,28 +270,53 @@ func mergeEngines(found []*tool) (map[string]Engine, map[string][]string) {
 	return engines, users
 }
 
-func checkEngine(ctx context.Context, sys Sys, opt Options, name string, e Engine, usedBy []string) *Item {
-	it := &Item{Kind: "engine", Name: name, UsedBy: usedBy, Target: e.Version, Tested: true}
+func checkEngine(ctx context.Context, sys Sys, opt Options, name string, m merged, usedBy []string) *Item {
+	e := m.Engine
+	it := &Item{Kind: "engine", Name: name, UsedBy: usedBy, Target: e.Version, Tested: true,
+		exact: opt.Pinned || e.Below != "", engine: e}
 	it.Path = sys.Locate(name)
 	if it.Path != "" {
-		it.Installed = EngineVersion(sys.EngineOutput(ctx, name, it.Path))
+		it.Installed = engineVersion(ctx, sys, name, it.Path, e)
 		it.Unknown = it.Installed == ""
+	}
+	if e.Below != "" {
+		verb := "accepts"
+		if len(m.boundBy) > 1 {
+			verb = "accept"
+		}
+		it.Reason = fmt.Sprintf("%s %s only %s below %s", strings.Join(m.boundBy, ", "), verb, name, e.Below)
 	}
 	goMod := e.Go
 	if e.Release != "" && goMod == "" {
 		goMod = "github.com/" + e.Release
 	}
-	if !opt.Pinned && goMod != "" {
+	switch {
+	case opt.Pinned || goMod == "":
+	case e.Below != "":
+		if v, err := highestBelow(ctx, sys, modulePath(goMod), e.Below); err == nil && Compare(v, e.Version) > 0 {
+			it.Target, it.Tested = strings.TrimPrefix(v, "v"), false
+		}
+	default:
 		if v, err := latest(ctx, sys, modulePath(goMod)); err == nil && Compare(v, e.Version) >= 0 {
 			it.Target, it.Tested = strings.TrimPrefix(v, "v"), false
 		}
 	}
+	system := e.Go == "" && e.Pip == "" && e.Release == ""
 
 	switch {
 	case it.Unknown:
 		return it // installed, version unreadable: leave it alone
 	case it.Path == "":
 		it.Action = "install"
+	case e.Below != "" && Compare(it.Installed, e.Below) >= 0:
+		it.Action = "downgrade"
+	case system:
+		// the distro decides the minor (apt has 7.94 where nmap.org has 7.98): only another major needs a hand
+		if sameMajor(it.Installed, it.Target) {
+			it.SystemOK = true
+			return it
+		}
+		it.Action = "update"
 	case opt.Pinned && Compare(it.Installed, it.Target) != 0,
 		!opt.Pinned && Compare(it.Installed, it.Target) < 0:
 		it.Action = "update"
@@ -267,14 +329,15 @@ func checkEngine(ctx context.Context, sys Sys, opt Options, name string, e Engin
 		dir = filepath.Dir(it.Path)
 	}
 	ver := "latest"
-	if opt.Pinned {
-		ver = "v" + e.Version
+	if it.exact {
+		ver = "v" + it.Target
 	}
 	switch {
 	case e.Release != "":
 		if dir == "" {
 			dir = sys.DefaultBin()
 		}
+		it.installTo = dir
 		it.Command = fmt.Sprintf("curl -sSfL https://raw.githubusercontent.com/%s/main/scripts/install.sh | sh -s -- -b %s v%s",
 			e.Release, dir, it.Target)
 		if opt.AllowScripts {
@@ -289,13 +352,16 @@ func checkEngine(ctx context.Context, sys Sys, opt Options, name string, e Engin
 		if dir != "" {
 			it.env = append(it.env, "GOBIN="+dir)
 			it.Command = "GOBIN=" + dir + " " + it.Command
+			it.installTo = dir
+		} else {
+			it.installTo = sys.DefaultBin()
 		}
 		it.argv = []string{"go", "install", e.Go + "@" + ver}
 	case e.Pip != "":
 		args := []string{"pipx", "upgrade", e.Pip}
 		switch {
-		case opt.Pinned:
-			args = []string{"pipx", "install", "--force", e.Pip + "==" + e.Version}
+		case it.exact:
+			args = []string{"pipx", "install", "--force", e.Pip + "==" + it.Target}
 		case it.Path == "":
 			args = []string{"pipx", "install", e.Pip}
 		}
@@ -345,12 +411,52 @@ func Apply(ctx context.Context, sys Sys, r *Report) {
 		// the engine that comes first on PATH
 		it.Path = sys.Locate(it.Name)
 		if it.Path != "" {
-			it.Installed = EngineVersion(sys.EngineOutput(ctx, it.Name, it.Path))
+			it.Installed = engineVersion(ctx, sys, it.Name, it.Path, it.engine)
 		}
-		if it.Path == "" || Compare(it.Installed, it.Target) < 0 {
-			it.Result, it.Err = "failed", fmt.Sprintf("installed, but %s is still %s; another copy may come first on PATH", it.Name, orDash(it.Installed))
+		c := Compare(it.Installed, it.Target)
+		if it.Path != "" && (c == 0 || c > 0 && !it.exact) {
+			continue
+		}
+		it.Result = "failed"
+		dest := ""
+		if it.installTo != "" {
+			dest = filepath.Join(it.installTo, it.Name)
+		}
+		switch {
+		case it.Path == "":
+			it.Err = fmt.Sprintf("installed, but %s is not on PATH", it.Name)
+			if dest != "" {
+				it.Err += "; it went to " + dest
+			}
+		case dest != "" && dest != it.Path:
+			it.Err = fmt.Sprintf("installed %s %s, but %s comes first on PATH and is %s",
+				dest, orDash(engineVersion(ctx, sys, it.Name, dest, it.engine)), it.Path, orDash(it.Installed))
+		default:
+			it.Err = fmt.Sprintf("installed, but %s is still %s", it.Path, orDash(it.Installed))
 		}
 	}
+}
+
+// engineVersion is the installed version of an engine. For a Go engine it is the module version in the
+// binary's build info, what go install wrote: the version an engine prints can be wrong (ffuf 2.3.0
+// prints 2.1.0-dev, tlsx 1.4.3 prints v1.4.0). The printed version is the fallback, for other engines
+// and for binaries without a module version (stripped, a local build, another module's binary).
+func engineVersion(ctx context.Context, sys Sys, name, path string, e Engine) string {
+	if e.Go != "" {
+		if info, err := sys.BuildInfo(path); err == nil && info.Main.Path != "" &&
+			(e.Go == info.Main.Path || strings.HasPrefix(e.Go, info.Main.Path+"/")) {
+			if v := ModuleVersion(info); v != "" {
+				return strings.TrimPrefix(v, "v")
+			}
+		}
+	}
+	return EngineVersion(sys.EngineOutput(ctx, name, path))
+}
+
+// sameMajor is true when both versions parse and have the same major.
+func sameMajor(a, b string) bool {
+	va, vb := parse(a), parse(b)
+	return va.ok && vb.ok && va.num[0] == vb.num[0]
 }
 
 // readFile is os.ReadFile; engines.json is read from the downloaded module.
@@ -386,6 +492,29 @@ func download(ctx context.Context, sys Sys, module string) (moduleInfo, error) {
 func latest(ctx context.Context, sys Sys, module string) (string, error) {
 	m, err := goJSON(ctx, sys, "list", "-m", "-json", module+"@latest")
 	return m.Version, err
+}
+
+// highestBelow is the highest release of a public module lower than bound, from the module proxy.
+// Pre-releases and pseudo-versions are skipped.
+func highestBelow(ctx context.Context, sys Sys, module, bound string) (string, error) {
+	out, err := sys.Run(ctx, goEnv(), "go", "list", "-m", "-versions", "-json", module)
+	var m struct{ Versions []string }
+	if jerr := json.Unmarshal(out, &m); jerr != nil {
+		if err == nil {
+			err = jerr
+		}
+		return "", fmt.Errorf("go list: %s", lastLine(string(out), err.Error()))
+	}
+	best := ""
+	for _, v := range m.Versions {
+		if IsRelease(v) && parse(v).pre == "" && Compare(v, bound) < 0 && Compare(v, best) > 0 {
+			best = v
+		}
+	}
+	if best == "" {
+		return "", fmt.Errorf("no release of %s below %s", module, bound)
+	}
+	return best, nil
 }
 
 func goJSON(ctx context.Context, sys Sys, args ...string) (moduleInfo, error) {

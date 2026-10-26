@@ -120,16 +120,25 @@ func cmpBool(a, b bool) int {
 	return 1
 }
 
-var engineVersionRe = regexp.MustCompile(`(\d+)\.(\d+)(?:\.(\d+))?`)
+// engineVersionRe is X.Y or X.Y.Z, with the end of a range (go1.20~1.26) taken along so that it is
+// skipped with its start.
+var engineVersionRe = regexp.MustCompile(`(\d+)\.(\d+)(?:\.(\d+))?(?:~\d+\.\d+(?:\.\d+)?)?`)
 
 // EngineVersion returns the first X.Y.Z (or X.Y, as nmap prints) in an engine's version output, or "".
+// A version glued to letters other than v is skipped: Go toolchain names (nuclei 3.11 first warns
+// "sonic/ast only supports (go1.17~1.26 and amd64 CPU)").
 func EngineVersion(out string) string {
-	m := engineVersionRe.FindStringSubmatch(out)
-	if m == nil {
-		return ""
+	for _, m := range engineVersionRe.FindAllStringSubmatchIndex(out, -1) {
+		if i := m[0]; i > 0 && isLetter(out[i-1]) && out[i-1] != 'v' {
+			continue
+		}
+		major, minor := out[m[2]:m[3]], out[m[4]:m[5]]
+		if m[6] < 0 {
+			return major + "." + minor
+		}
+		return major + "." + minor + "." + out[m[6]:m[7]]
 	}
-	if m[3] == "" {
-		return m[1] + "." + m[2]
-	}
-	return m[1] + "." + m[2] + "." + m[3]
+	return ""
 }
+
+func isLetter(c byte) bool { return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' }

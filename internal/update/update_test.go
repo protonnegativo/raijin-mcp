@@ -86,9 +86,12 @@ func TestEngineVersion(t *testing.T) {
 		"trufflehog": "trufflehog 3.99.3\n",
 		"nmap":       "Nmap version 7.94SVN ( https://nmap.org )\nPlatform: x86_64-pc-linux-gnu\nCompiled with: liblua-5.4.6 openssl-3.0.13\n",
 		"arjun":      "2.2.7\n",
+		// nuclei 3.11.1 warns about its JSON library first; go1.17 is not the version
+		"nuclei-3.11": "WARNING: sonic/ast only supports (go1.17~1.26 and amd64 CPU) or (go1.20~1.26 and arm64 CPU), but your environment is not suitable and will fallback to encoding/json\n[\x1b[34mINF\x1b[0m] Nuclei Engine Version: v3.11.1\n[\x1b[34mINF\x1b[0m] Nuclei Config Directory: /root/.config/nuclei\n",
 	}
 	want := map[string]string{"nuclei": "3.3.9", "httpx": "1.6.10", "naabu": "2.6.1", "tlsx": "1.2.2", "katana": "1.1.2",
-		"subfinder": "2.6.7", "dnsx": "1.2.1", "ffuf": "2.1.0", "dalfox": "2.9.2", "trufflehog": "3.99.3", "nmap": "7.94", "arjun": "2.2.7"}
+		"subfinder": "2.6.7", "dnsx": "1.2.1", "ffuf": "2.1.0", "dalfox": "2.9.2", "trufflehog": "3.99.3", "nmap": "7.94", "arjun": "2.2.7",
+		"nuclei-3.11": "3.11.1"}
 	for name, out := range cases {
 		if got := EngineVersion(out); got != want[name] {
 			t.Errorf("%s: EngineVersion = %q, want %q", name, got, want[name])
@@ -103,8 +106,10 @@ func TestEngineVersion(t *testing.T) {
 type fakeSys struct {
 	paths    map[string]string // name -> path
 	tools    map[string]string // path -> module version
+	mods     map[string]string // path -> "module version", for engines with build info
 	engines  map[string]string // engine name -> version output
 	modules  map[string]string // module -> latest version
+	versions map[string]string // module -> its releases, space-separated
 	dirs     map[string]string // module -> downloaded dir
 	writable bool
 	ran      []string
@@ -113,6 +118,10 @@ type fakeSys struct {
 
 func (f *fakeSys) Locate(name string) string { return f.paths[name] }
 func (f *fakeSys) BuildInfo(path string) (*debug.BuildInfo, error) {
+	if m, ok := f.mods[path]; ok {
+		p, v, _ := strings.Cut(m, " ")
+		return &debug.BuildInfo{Main: debug.Module{Path: p, Version: v}}, nil
+	}
 	v, ok := f.tools[path]
 	if !ok {
 		return nil, errors.New("not a Go binary")
@@ -125,6 +134,15 @@ func (f *fakeSys) DefaultBin() string                                    { retur
 
 func (f *fakeSys) Run(_ context.Context, env []string, name string, args ...string) ([]byte, error) {
 	cmd := strings.Join(append([]string{name}, args...), " ")
+	if name == "go" && len(args) > 2 && args[2] == "-versions" {
+		mod := args[len(args)-1]
+		v, ok := f.versions[mod]
+		if !ok {
+			return []byte("go: module lookup disabled"), errors.New("exit status 1")
+		}
+		b, _ := json.Marshal(map[string]any{"Path": mod, "Versions": strings.Fields(v)})
+		return b, nil
+	}
 	if name == "go" && (args[0] == "mod" || args[0] == "list") {
 		mod := strings.TrimSuffix(args[len(args)-1], "@latest")
 		v, ok := f.modules[mod]
@@ -218,10 +236,10 @@ func TestCheckPlansWithoutInstalling(t *testing.T) {
 	if n := it["naabu"]; n.Action != "update" || n.Installed != "2.5.0" {
 		t.Errorf("naabu: %+v", n)
 	}
-	if n := it["nmap"]; n.Action != "manual" || !n.Tested || !strings.Contains(n.Command, "apt install nmap") {
-		t.Errorf("nmap: %+v", n)
+	if n := it["nmap"]; n.Action != "" || !n.SystemOK || n.status() != "ok (system)" {
+		t.Errorf("nmap 7.80, tested 7.94, is a system package of the same major: %+v", n)
 	}
-	if r.Outdated() != 4 || r.Failed() {
+	if r.Outdated() != 3 || r.Failed() {
 		t.Errorf("outdated %d failed %v", r.Outdated(), r.Failed())
 	}
 }
@@ -256,9 +274,6 @@ func TestApply(t *testing.T) {
 	if n := it["nuclei"]; n.Result != "failed" || n.Err != "go: build failed" {
 		t.Errorf("nuclei: %+v", n)
 	}
-	if it["nmap"].Result != "run by hand" {
-		t.Errorf("nmap: %+v", it["nmap"])
-	}
 	if len(f.ran) != 3 || !strings.Contains(f.ran[0], "GOPRIVATE=github.com/protonnegativo/*") || !strings.Contains(f.ran[0], "GOBIN=/opt/bin") {
 		t.Errorf("ran: %q", f.ran)
 	}
@@ -273,6 +288,153 @@ func TestApplyNoticesAnInstallThatChangedNothing(t *testing.T) {
 	Apply(context.Background(), f, r) // naabu still prints 2.5.0
 	if n := byName(r)["naabu"]; n.Result != "failed" || !strings.Contains(n.Err, "still 2.5.0") {
 		t.Errorf("naabu: %+v", n)
+	}
+}
+
+func TestEngineVersionFromBuildInfo(t *testing.T) {
+	f := newFake(t)
+	// what go install wrote wins over what the binary prints: nuclei warns about go1.17 first, ffuf
+	// 2.3.0 prints 2.1.0-dev
+	f.engines["nuclei"] = "WARNING: sonic/ast only supports (go1.17~1.26 and amd64 CPU)\n[INF] Nuclei Engine Version: v3.3.0"
+	f.mods = map[string]string{"/usr/local/bin/nuclei": "github.com/projectdiscovery/nuclei/v3 v3.4.0", "/opt/bin/ffuf": "github.com/ffuf/ffuf/v2 v2.3.0"}
+	f.paths["ffuf"], f.engines["ffuf"] = "/opt/bin/ffuf", "ffuf version: 2.1.0-dev"
+	f.paths["raijin-fuzz"], f.tools["/opt/bin/raijin-fuzz"] = "/opt/bin/raijin-fuzz", "v0.1.0"
+	f.modules[Module+"/raijin-fuzz"], f.modules["github.com/ffuf/ffuf/v2"] = "v0.1.0", "v2.3.0"
+	f.dirs[Module+"/raijin-fuzz"] = moduleDir(t, `{"ffuf": {"version": "2.1.0", "go": "github.com/ffuf/ffuf/v2"}}`)
+	f.paths["naabu"] = "/opt/bin/naabu"
+	f.mods["/opt/bin/naabu"] = "github.com/someone/else v9.0.0" // another module's binary: its output counts
+	r := Check(context.Background(), f, Options{Verbs: []string{"scan", "fuzz", "ports"}})
+	it := byName(r)
+	if n := it["nuclei"]; n.Installed != "3.4.0" || n.Action != "" {
+		t.Errorf("nuclei: %+v", n)
+	}
+	if n := it["ffuf"]; n.Installed != "2.3.0" || n.Action != "" {
+		t.Errorf("ffuf: %+v", n)
+	}
+	if n := it["naabu"]; n.Installed != "2.5.0" || n.Action != "update" {
+		t.Errorf("naabu: %+v", n)
+	}
+	f.mods["/usr/local/bin/nuclei"] = "github.com/projectdiscovery/nuclei/v3 (devel)" // a local build
+	if n := byName(Check(context.Background(), f, Options{Verbs: []string{"scan"}}))["nuclei"]; n.Installed != "3.3.0" {
+		t.Errorf("nuclei (devel): %+v", n)
+	}
+}
+
+func TestApplyNamesTheCopyFirstOnPath(t *testing.T) {
+	f := newFake(t)
+	f.paths["nuclei"] = "/root/go/bin/nuclei"
+	f.writable = false // goes to the default GOBIN, /home/u/go/bin
+	r := Check(context.Background(), f, Options{Verbs: []string{"scan"}})
+	f.mods = map[string]string{"/home/u/go/bin/nuclei": "github.com/projectdiscovery/nuclei/v3 v3.4.0"}
+	Apply(context.Background(), f, r)
+	want := "installed /home/u/go/bin/nuclei 3.4.0, but /root/go/bin/nuclei comes first on PATH and is 3.3.9"
+	if n := byName(r)["nuclei"]; n.Result != "failed" || n.Err != want {
+		t.Errorf("nuclei: %+v", n)
+	}
+
+	// the copy on PATH has the new module version, whatever it prints: updated
+	f = newFake(t)
+	r = Check(context.Background(), f, Options{Verbs: []string{"scan"}})
+	f.mods = map[string]string{"/usr/local/bin/nuclei": "github.com/projectdiscovery/nuclei/v3 v3.4.0"}
+	f.engines["nuclei"] = "WARNING: sonic/ast only supports (go1.17~1.26 and amd64 CPU)"
+	Apply(context.Background(), f, r)
+	if n := byName(r)["nuclei"]; n.Result != "updated" || n.Installed != "3.4.0" {
+		t.Errorf("nuclei: %+v", n)
+	}
+}
+
+// dnsxFake has raijin-subs and raijin-takeover, which both refuse dnsx 1.3.0 and later, and dnsx 1.3.1
+// installed.
+func dnsxFake(t *testing.T, subs, takeover string) *fakeSys {
+	f := newFake(t)
+	for _, verb := range []string{"subs", "takeover"} {
+		bin := "/opt/bin/raijin-" + verb
+		f.paths["raijin-"+verb], f.tools[bin], f.modules[Module+"/raijin-"+verb] = bin, "v0.1.0", "v0.1.0"
+	}
+	f.dirs[Module+"/raijin-subs"], f.dirs[Module+"/raijin-takeover"] = moduleDir(t, subs), moduleDir(t, takeover)
+	f.paths["dnsx"] = "/usr/local/bin/dnsx"
+	f.mods = map[string]string{"/usr/local/bin/dnsx": "github.com/projectdiscovery/dnsx v1.3.1"}
+	f.modules["github.com/projectdiscovery/dnsx"] = "v1.3.1"
+	f.versions = map[string]string{"github.com/projectdiscovery/dnsx": "v1.2.0 v1.2.1 v1.2.2 v1.2.3 v1.2.4-rc.1 v1.3.0 v1.3.1"}
+	return f
+}
+
+const dnsxBelow130 = `{"dnsx": {"version": "1.2.1", "go": "github.com/projectdiscovery/dnsx/cmd/dnsx", "below": "1.3.0"}}`
+
+func TestBelowDowngrades(t *testing.T) {
+	f := dnsxFake(t, dnsxBelow130, dnsxBelow130)
+	r := Check(context.Background(), f, Options{Verbs: []string{"subs", "takeover"}})
+	d := byName(r)["dnsx"]
+	if d.Action != "downgrade" || d.Target != "1.2.3" || d.Tested || d.Installed != "1.3.1" ||
+		d.Command != "GOBIN=/usr/local/bin go install github.com/projectdiscovery/dnsx/cmd/dnsx@v1.2.3" ||
+		d.Reason != "raijin-subs, raijin-takeover accept only dnsx below 1.3.0" {
+		t.Errorf("dnsx: %+v", d)
+	}
+	var b strings.Builder
+	r.Table(&b)
+	for _, want := range []string{"downgrade", "dnsx: 1.3.1 is not accepted; raijin-subs, raijin-takeover accept only dnsx below 1.3.0", "1 of 3 out of date"} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("table misses %q:\n%s", want, b.String())
+		}
+	}
+	if !strings.Contains(string(r.JSON("v0.1.0", "")), `"reason":"raijin-subs, raijin-takeover accept only dnsx below 1.3.0"`) {
+		t.Errorf("json: %s", r.JSON("v0.1.0", ""))
+	}
+
+	// the install lands at the accepted version: an exact target, so a newer one would fail
+	f.mods["/usr/local/bin/dnsx"] = "github.com/projectdiscovery/dnsx v1.2.3"
+	Apply(context.Background(), f, r)
+	if d.Result != "updated" || r.Failed() {
+		t.Errorf("dnsx after apply: %+v", d)
+	}
+
+	// an accepted version installed: nothing to do, even if it is older than the highest accepted
+	f = dnsxFake(t, dnsxBelow130, dnsxBelow130)
+	f.mods["/usr/local/bin/dnsx"] = "github.com/projectdiscovery/dnsx v1.2.3"
+	if d := byName(Check(context.Background(), f, Options{Verbs: []string{"subs", "takeover"}}))["dnsx"]; d.Action != "" {
+		t.Errorf("dnsx 1.2.3: %+v", d)
+	}
+
+	// no version list: the tested version
+	f = dnsxFake(t, dnsxBelow130, dnsxBelow130)
+	f.versions = nil
+	if d := byName(Check(context.Background(), f, Options{Verbs: []string{"subs", "takeover"}}))["dnsx"]; d.Target != "1.2.1" || !d.Tested || d.Action != "downgrade" {
+		t.Errorf("dnsx without a version list: %+v", d)
+	}
+}
+
+func TestBelowStrictestWins(t *testing.T) {
+	// raijin-takeover bounds lower, and raijin-subs tests a version above that bound
+	f := dnsxFake(t, `{"dnsx": {"version": "1.2.3", "go": "github.com/projectdiscovery/dnsx/cmd/dnsx", "below": "1.3.0"}}`,
+		`{"dnsx": {"version": "1.2.1", "go": "github.com/projectdiscovery/dnsx/cmd/dnsx", "below": "1.2.2"}}`)
+	d := byName(Check(context.Background(), f, Options{Verbs: []string{"subs", "takeover"}}))["dnsx"]
+	if d.Target != "1.2.1" || d.Action != "downgrade" || d.Reason != "raijin-takeover accepts only dnsx below 1.2.2" {
+		t.Errorf("dnsx: %+v", d)
+	}
+
+	// a tool without a bound tests 1.3.1: pinned still goes to the version under the other's bound
+	f = dnsxFake(t, `{"dnsx": {"version": "1.3.1", "go": "github.com/projectdiscovery/dnsx/cmd/dnsx"}}`, dnsxBelow130)
+	d = byName(Check(context.Background(), f, Options{Verbs: []string{"subs", "takeover"}, Pinned: true}))["dnsx"]
+	if d.Target != "1.2.1" || !d.Tested || d.Action != "downgrade" || d.Reason != "raijin-takeover accepts only dnsx below 1.3.0" ||
+		!strings.HasSuffix(d.Command, "dnsx@v1.2.1") {
+		t.Errorf("pinned dnsx: %+v", d)
+	}
+}
+
+func TestSystemPackages(t *testing.T) {
+	f := newFake(t)
+	f.engines["nmap"] = "Nmap version 6.40 ( https://nmap.org )"
+	if n := byName(Check(context.Background(), f, Options{Verbs: []string{"ports"}}))["nmap"]; n.Action != "manual" || n.SystemOK ||
+		!strings.Contains(n.Command, "apt install nmap") {
+		t.Errorf("nmap of another major: %+v", n)
+	}
+	delete(f.paths, "nmap")
+	r := Check(context.Background(), f, Options{Verbs: []string{"ports"}})
+	if n := byName(r)["nmap"]; n.Action != "manual" || !strings.Contains(n.Command, "apt install nmap") {
+		t.Errorf("missing nmap: %+v", n)
+	}
+	if r.Outdated() != 2 {
+		t.Errorf("outdated %d", r.Outdated())
 	}
 }
 
@@ -351,7 +513,7 @@ func TestTable(t *testing.T) {
 	r := Check(context.Background(), f, Options{Verbs: []string{"ports"}})
 	var b strings.Builder
 	r.Table(&b)
-	for _, want := range []string{"NAME", "LATEST", "naabu", "2.5.0", "update", "nmap", "7.94 (tested)", "run by hand:", "apt install nmap", "2 of 3 out of date"} {
+	for _, want := range []string{"NAME", "LATEST", "naabu", "2.5.0", "update", "nmap", "7.94 (tested)", "ok (system)", "1 of 3 out of date"} {
 		if !strings.Contains(b.String(), want) {
 			t.Errorf("table misses %q:\n%s", want, b.String())
 		}

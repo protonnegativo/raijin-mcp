@@ -21,7 +21,7 @@ import (
 
 // instructions is sent once at initialize. It explains the shared output so tool descriptions
 // do not have to repeat it.
-const instructions = "Raijin offensive-security tools, for authorized targets only. Each returns compact Raijin Schema JSON: summary, findings (ranked), groups (collapsed info), omitted (counts of what was cut), errors (with hints), next (follow-ups), raw (engine output file)."
+const instructions = "Raijin offensive-security tools, for authorized targets only. Each returns compact Raijin Schema JSON: summary, findings (ranked), groups (collapsed info), omitted (counts of what was cut), errors (with hints), next (follow-ups), raw (engine output file). Every output carries schema_version; errors[].kind==\"scope\" lists the scope lines to fix."
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))

@@ -382,7 +382,7 @@ func TestCallExit1IsUsage(t *testing.T) {
 	s := start(t)
 	text, isErr := s.call(2, "raijin_tls", `{"scope":["a.com"],"targets":["a.com"]}`)
 	if !isErr || !strings.Contains(text, `"kind":"usage"`) || strings.Contains(text, "should be discarded") ||
-		!strings.Contains(text, "flag provided but not defined") {
+		!strings.Contains(text, "flag provided but not defined") || !strings.HasPrefix(text, `{"schema_version":1,"tool":"raijin-tls"`) {
 		t.Errorf("exit 1 should be a usage error, got %v %s", isErr, text)
 	}
 }

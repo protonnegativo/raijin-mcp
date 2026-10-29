@@ -36,3 +36,11 @@ func TestVersionLine(t *testing.T) {
 		t.Errorf("version line: %q", out.String())
 	}
 }
+
+func TestReleaseVersionWins(t *testing.T) {
+	releaseVersion = "v9.9.9"
+	defer func() { releaseVersion = "" }()
+	if got := version(); got != "v9.9.9" {
+		t.Errorf("version() = %q, want the linked release version", got)
+	}
+}

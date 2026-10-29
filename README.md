@@ -1,5 +1,11 @@
 # ⚡ Raijin MCP
 
+[![CI](https://github.com/protonnegativo/raijin-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/protonnegativo/raijin-mcp/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/protonnegativo/raijin-mcp)](https://github.com/protonnegativo/raijin-mcp/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/protonnegativo/raijin-mcp)](LICENSE)
+[![Go Reference](https://pkg.go.dev/badge/github.com/protonnegativo/raijin-mcp.svg)](https://pkg.go.dev/github.com/protonnegativo/raijin-mcp)
+[![Go Report Card](https://goreportcard.com/badge/github.com/protonnegativo/raijin-mcp)](https://goreportcard.com/report/github.com/protonnegativo/raijin-mcp)
+
 **Every Raijin tool for any MCP client: one server, one typed tool per binary, the same compact JSON.**
 
 `raijin-mcp` is the MCP server of **Raijin**, an arsenal of offensive security tools built for AI agents. It speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio and exposes each Raijin binary it finds on `PATH` as a tool: `raijin_scan` (nuclei), `raijin_probe` (httpx), `raijin_subs`, `raijin_ports`, `raijin_crawl`, `raijin_params`, `raijin_fuzz`, `raijin_tls`, `raijin_secrets`, `raijin_xss`, `raijin_cors`, `raijin_takeover`, `raijin_js` and `raijin_diff`. A call runs the binary with `--format json` and returns its stdout, the **Raijin Schema**, as the tool result.

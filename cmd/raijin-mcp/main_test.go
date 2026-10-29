@@ -50,6 +50,10 @@ exit 2`,
 	"raijin-cors": `case "$1" in -h) echo "$HELP" >&2; exit 0;; esac
 echo '{"schema_version":1,"tool":"raijin-cors","summary":"invalid scope file, nothing scanned","findings":[],"groups":[],"errors":[{"kind":"scope","hint":"line 2: port in rule '"'"'example.com:443'"'"'; use the host only: '"'"'example.com'"'"'"},{"kind":"scope","hint":"line 3: CIDR has host bits set '"'"'10.0.0.7/24'"'"'; write '"'"'10.0.0.0/24'"'"' for the whole network, or '"'"'10.0.0.7'"'"' for the single address"}]}'
 exit 2`,
+	"raijin-tls": `case "$1" in -h) echo "$HELP" >&2; exit 0;; esac
+echo '{"schema_version":1,"tool":"raijin-tls","summary":"should be discarded"}'
+echo "flag provided but not defined: -bogus" >&2
+exit 1`,
 	"raijin-crawl": `case "$1" in -h) echo "$HELP" >&2; exit 0;; esac
 exec sleep 30`,
 	"raijin-ports": `case "$1" in -h) printf '  -host value\n    \thosts\n  -format string\n    \tformat\n' >&2; exit 0;; esac
@@ -369,6 +373,17 @@ func TestCallScopeErrorsPassThrough(t *testing.T) {
 	}
 	if len(doc.Errors) != 2 || doc.Errors[0].Kind != "scope" || !strings.Contains(doc.Errors[1].Hint, "host bits set") {
 		t.Errorf("scope errors lost or changed: %+v", doc.Errors)
+	}
+}
+
+// Exit 1 is a usage error: the JSON on stdout is discarded and the first stderr line is the hint.
+func TestCallExit1IsUsage(t *testing.T) {
+	fakePath(t)
+	s := start(t)
+	text, isErr := s.call(2, "raijin_tls", `{"scope":["a.com"],"targets":["a.com"]}`)
+	if !isErr || !strings.Contains(text, `"kind":"usage"`) || strings.Contains(text, "should be discarded") ||
+		!strings.Contains(text, "flag provided but not defined") {
+		t.Errorf("exit 1 should be a usage error, got %v %s", isErr, text)
 	}
 }
 

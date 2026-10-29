@@ -532,9 +532,10 @@ type errorEntry struct {
 // fail is an isError result shaped like a Raijin Schema result with one error.
 func fail(t *Tool, kind, hint string) mcp.Result {
 	b, _ := json.Marshal(struct {
-		Tool   string       `json:"tool"`
-		Errors []errorEntry `json:"errors"`
-	}{t.Binary(), []errorEntry{{kind, hint}}})
+		SchemaVersion int          `json:"schema_version"`
+		Tool          string       `json:"tool"`
+		Errors        []errorEntry `json:"errors"`
+	}{1, t.Binary(), []errorEntry{{kind, hint}}})
 	return mcp.TextResult(string(b), true)
 }
 

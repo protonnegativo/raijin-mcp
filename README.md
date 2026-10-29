@@ -1,5 +1,11 @@
 # ⚡ Raijin MCP
 
+[![CI](https://github.com/protonnegativo/raijin-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/protonnegativo/raijin-mcp/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/protonnegativo/raijin-mcp)](https://github.com/protonnegativo/raijin-mcp/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/protonnegativo/raijin-mcp)](LICENSE)
+[![Go Reference](https://pkg.go.dev/badge/github.com/protonnegativo/raijin-mcp.svg)](https://pkg.go.dev/github.com/protonnegativo/raijin-mcp)
+[![Go Report Card](https://goreportcard.com/badge/github.com/protonnegativo/raijin-mcp)](https://goreportcard.com/report/github.com/protonnegativo/raijin-mcp)
+
 **Every Raijin tool for any MCP client: one server, one typed tool per binary, the same compact JSON.**
 
 `raijin-mcp` is the MCP server of **Raijin**, an arsenal of offensive security tools built for AI agents. It speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio and exposes each Raijin binary it finds on `PATH` as a tool: `raijin_scan` (nuclei), `raijin_probe` (httpx), `raijin_subs`, `raijin_ports`, `raijin_crawl`, `raijin_params`, `raijin_fuzz`, `raijin_tls`, `raijin_secrets`, `raijin_xss`, `raijin_cors`, `raijin_takeover`, `raijin_js` and `raijin_diff`. A call runs the binary with `--format json` and returns its stdout, the **Raijin Schema**, as the tool result.
@@ -10,17 +16,17 @@ An agent with a shell can run `raijin-scan` directly, and the result is the same
 
 ```
 What the agent reads to know the tools
-  --tools scan,probe     █▊                          462 tokens
-  13 tools, tools/list   ██████████▎               2,636 tokens
-  -h of the 13 CLIs      ████████████████████      5,113 tokens
+  --tools scan,probe     █▉                          556 tokens
+  14 tools, tools/list   █████████▉                2,989 tokens
+  -h of the 14 CLIs      ████████████████████      6,024 tokens
 ```
 
 The bars are drawn to scale against the `-h` text.
 
 - **About 200 tokens a tool.** Descriptions are one line. The shared output format is explained once, in the `initialize` instructions, not in every tool. `--tools` exposes only the tools a task needs.
-- **The result is not touched.** The text the model reads is the CLI's stdout, byte for byte: `bench/run.sh` checked 10 tools on their fixtures and all 10 were identical. No pretty-printing, and no `structuredContent` copy that would send the same JSON twice.
+- **The result is not touched.** The text the model reads is the CLI's stdout, byte for byte: `bench/run.sh` checked 13 tools on their fixtures and all 13 were identical. No pretty-printing, and no `structuredContent` copy that would send the same JSON twice.
 - **Scope is enforced before anything runs.** Every tool that sends traffic requires `scope`; without it the call fails with a hint and the binary never starts.
-- **Errors are readable.** Bad arguments, a missing scope, a missing engine or a timeout come back as `isError` results shaped like the Raijin Schema (`{"tool":...,"errors":[{"kind":...,"hint":...}]}`), so the model can fix the call and retry.
+- **Errors are readable.** Bad arguments, a missing scope, a missing engine or a timeout come back as `isError` results shaped like the Raijin Schema (`{"schema_version":1,"tool":...,"errors":[{"kind":...,"hint":...}]}`), so the model can fix the call and retry.
 
 The list is not free: an agent that already knows one CLI pays nothing to call it through a shell. Full numbers are in [BENCHMARK.md](BENCHMARK.md), and `bench/run.sh` reproduces them.
 
@@ -120,8 +126,9 @@ The result of a call is the tool's JSON, unchanged. This is a real call of `raij
 
 ```json
 {
+  "schema_version": 1,
   "tool": "raijin-scan",
-  "version": "0.1.0",
+  "version": "v0.1.3-0.20261029132554-1099b48697b1",
   "target": "testdata/sample.jsonl",
   "summary": "2 findings (1 high, 1 medium), 1 info groups, 8 raw matches",
   "findings": [
@@ -131,14 +138,17 @@ The result of a call is the tool's JSON, unchanged. This is a real call of `raij
   "groups": [
     {"id": "tech-detect", "variants": ["nginx"], "locations": ["https://a.example.com", "https://b.example.com", "https://c.example.com"]}
   ],
-  "omitted": {"duplicates": 1, "out_of_scope": 1}
+  "omitted": {"duplicates": 1, "out_of_scope": 1, "unparsed": 1},
+  "errors": [
+    {"kind": "engine_format", "hint": "1 of 9 nuclei results had no template-id or matched-at; the engine's output format may have changed. Read testdata/sample.jsonl for the full output"}
+  ]
 }
 ```
 
-The `target` path is shortened. A call without a scope:
+The `target` path and the one in the hint are shortened. A call without a scope:
 
 ```json
-{"tool":"raijin-scan","errors":[{"kind":"missing_scope","hint":"scope is required: pass the authorized targets, e.g. [\"example.com\", \"*.example.com\", \"10.0.0.0/24\"]"}]}
+{"schema_version":1,"tool":"raijin-scan","errors":[{"kind":"missing_scope","hint":"scope is required: pass the authorized targets, e.g. [\"example.com\", \"*.example.com\", \"10.0.0.0/24\"]"}]}
 ```
 
 ## How it works
@@ -148,7 +158,7 @@ The `target` path is shortened. A call without a scope:
 - **Scope.** Tools that send traffic (scan, probe, ports, crawl, js, params, fuzz, tls, xss, cors) always require `scope`, and so do subs, takeover and secrets, whose binaries require it. The check runs in raijin-mcp before the binary starts, whatever the client does with the schema. A tool that should take a scope but whose binary has no `--scope` flag is not exposed. raijin-diff takes none. The binary then drops targets and results outside the scope, as it does on the command line.
 - **The call.** Flags are passed as `-flag=value`, so a value that starts with `-` is never read as a flag. raijin-mcp always adds `--format json` and never `--pretty` or `--banner`. Calls run in the background: `ping` and other calls are answered meanwhile, and `notifications/cancelled` kills the process. `--call-timeout` (30 minutes by default) bounds each call.
 - **engine_args.** Anything a tool would take after `--`. Flags that would add targets behind the scope check (`-u`, `-l`, `-list`, `-target`, `-host`, `-d`, `-iL`, ...), write files (`-o`, `-output`, `-me`, `-se`, `-sr`, ...), load a config, update the engine or run code (`-code`) are refused. It is a deny list, not a sandbox. raijin-cors and raijin-diff have no engine, and raijin-secrets takes no `engine_args` and no `verify`: verifying sends each secret to its provider, and that is the operator's call.
-- **Errors.** Exit 0 returns stdout. Exit 2 (engine missing) returns the tool's own JSON with `isError`, which carries the install hint. Exit 1 (usage) returns the first line of stderr as the hint. An unknown tool name is a JSON-RPC error (`-32602`), like `tools/call` without a `name`; argument problems are tool results with `isError`, so the model sees them.
+- **Errors.** Exit 0 returns stdout. Exit 2 (a structured error: engine missing, invalid scope file) returns the tool's own JSON with `isError`; the agent tells them apart by `errors[].kind`, and a `"scope"` error lists every scope line to fix (`line 2: port in rule ...`). Exit 1 (usage) discards stdout and returns the first line of stderr as the hint. Every Raijin result starts with `"schema_version": 1`, the version of the result format; raijin-mcp passes it through untouched. An unknown tool name is a JSON-RPC error (`-32602`), like `tools/call` without a `name`; argument problems are tool results with `isError`, so the model sees them.
 - **Protocol.** `initialize` (versions `2025-11-25`, `2025-06-18`, `2025-03-26` and `2024-11-05`; a client asking for another gets `2025-11-25`), `notifications/initialized`, `ping`, `tools/list`, `tools/call` and `notifications/cancelled`. The server has no resources or prompts and its tool list does not change while it runs (`listChanged: false`). JSON-RPC batches are not supported.
 
 ## Flags
@@ -174,7 +184,7 @@ go vet ./...
 PY=<python with tiktoken> bench/run.sh
 ```
 
-Standard library only. The protocol tests start the server on pipes with fake Raijin binaries (shell scripts) in a temp `PATH`: initialize and version negotiation, `tools/list` with only installed tools and flags read from `-h`, `tools/call` arguments and result, unknown tool, invalid params, missing scope, engine missing, cancellation. The updater's tests replace the machine with a fake (no network, no install): version ordering (tags, pseudo-versions, `(devel)`), build info, each engine's version output (nuclei's toolchain warning included), build info over printed versions, `below` bounds and downgrades, system packages, the plan for tools and engines, apply and its failures, the startup cache.
+raijin-mcp itself uses only the Go standard library and does not import raijin-core; the tools it runs are separate binaries. The protocol tests start the server on pipes with fake Raijin binaries (shell scripts) in a temp `PATH`: initialize and version negotiation, `tools/list` with only installed tools and flags read from `-h`, `tools/call` arguments and result, unknown tool, invalid params, missing scope, engine missing, cancellation. The updater's tests replace the machine with a fake (no network, no install): version ordering (tags, pseudo-versions, `(devel)`), build info, each engine's version output (nuclei's toolchain warning included), build info over printed versions, `below` bounds and downgrades, system packages, the plan for tools and engines, apply and its failures, the startup cache.
 
 To expose a new Raijin tool, add its entry to `Table` in `internal/tools/table.go`: verb, one-line description, target flags, whether it is active, and its main flags.
 

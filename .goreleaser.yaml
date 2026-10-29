@@ -1,0 +1,44 @@
+# GoReleaser config for raijin-mcp. Docs: https://goreleaser.com
+version: 2
+
+project_name: raijin-mcp
+
+before:
+  hooks:
+    - go mod tidy -diff
+
+builds:
+  - id: raijin-mcp
+    main: ./cmd/raijin-mcp
+    binary: raijin-mcp
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.releaseVersion={{ .Tag }}
+
+archives:
+  - id: default
+    name_template: "raijin-mcp_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# The GitHub Release (with generated notes) is already created by .github/release.sh;
+# GoReleaser only attaches the archives and checksums to it.
+changelog:
+  disable: true
+
+release:
+  mode: keep-existing

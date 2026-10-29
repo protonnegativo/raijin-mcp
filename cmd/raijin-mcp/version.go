@@ -2,9 +2,15 @@ package main
 
 import "runtime/debug"
 
-// version is the release this binary was built from: the module version for `go install ...@vX.Y.Z`
+// releaseVersion is set at link time (-ldflags "-X main.releaseVersion=v1.2.3") by the release build.
+var releaseVersion string
+
+// version is the release this binary was built from: the linked releaseVersion, else the module version for `go install ...@vX.Y.Z`
 // (or @latest), else "dev" with the VCS revision a local `go build` records.
 func version() string {
+	if releaseVersion != "" {
+		return releaseVersion
+	}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return "dev"
